@@ -1,0 +1,26 @@
+{
+  "name": "orbit-arena-server",
+  "version": "1.0.0",
+  "description": "서버 권위형(authoritative) 실시간 멀티플레이 게임 웹 서버 포트폴리오 — Node.js + WebSocket + SQLite/Supabase",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc",
+    "loadtest": "node scripts/loadtest.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.9.2"
+  }
+}
