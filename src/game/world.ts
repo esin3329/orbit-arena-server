@@ -27,6 +27,14 @@ export interface Bullet {
   vx: number;
   vy: number;
   ttl: number;
+  /** 지연 보상: 이 탄은 (현재 틱 - rewind) 시점의 플레이어 위치와 충돌 판정한다 (0 = 보상 없음) */
+  rewind: number;
+}
+
+/** 한 틱이 끝난 시점의 엔티티 위치 기록 (지연 보상 되감기용) */
+interface HistoryFrame {
+  tick: number;
+  pos: Map<number, { x: number; y: number; alive: boolean }>;
 }
 
 export interface Orb {
@@ -58,6 +66,8 @@ export class GameWorld {
   readonly orbs: Orb[] = [];
   private bullets: Bullet[] = [];
   private events: GameEvent[] = [];
+  /** 최근 LAG_COMP_MAX_TICKS+1 틱의 위치 링버퍼 (tick % 길이 로 인덱싱) */
+  private history: Array<HistoryFrame | undefined> = new Array(sim.LAG_COMP_MAX_TICKS + 2);
   private nextEid = 1;
   private nextBulletId = 1;
   private rand: Rng;
@@ -129,6 +139,34 @@ export class GameWorld {
     this.stepBullets();
     this.stepOrbs();
     this.stepRespawns();
+    this.recordHistory();
+  }
+
+  private recordHistory() {
+    const pos = new Map<number, { x: number; y: number; alive: boolean }>();
+    for (const e of this.entities.values()) pos.set(e.eid, { x: e.x, y: e.y, alive: e.alive });
+    this.history[this.tick % this.history.length] = { tick: this.tick, pos };
+  }
+
+  private frame(tick: number): HistoryFrame | undefined {
+    const f = this.history[tick % this.history.length];
+    return f && f.tick === tick ? f : undefined;
+  }
+
+  /**
+   * 과거 시점(소수 틱 가능)의 엔티티 위치. 두 기록 사이를 선형 보간한다 — 클라이언트가 보간해서 그린 위치와 같게.
+   * 그 시점에 죽어 있었거나 기록이 없으면(아직 스폰 전 등) null → 판정 대상 아님.
+   * 현재 틱(이번 틱 이동이 이미 반영된 상태)은 엔티티 자체를 쓴다.
+   */
+  positionAt(e: Entity, tick: number): { x: number; y: number } | null {
+    if (tick >= this.tick) return e.alive ? e : null;
+    const t0 = Math.floor(tick);
+    const a = this.frame(t0)?.pos.get(e.eid);
+    // 틱 진행 도중(탄환 처리 시점)에는 현재 틱 기록이 아직 없으므로 현재 엔티티가 그 틱의 위치다
+    const b = this.frame(t0 + 1)?.pos.get(e.eid) ?? (t0 + 1 >= this.tick && e.alive ? { x: e.x, y: e.y, alive: true } : undefined);
+    if (!a || !a.alive || !b || !b.alive) return null; // 사망/리스폰/스폰 경계에서는 판정하지 않는다(보수적)
+    const f = tick - t0;
+    return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
   }
 
   private applyInput(e: Entity, input: PlayerInput) {
@@ -149,13 +187,28 @@ export class GameWorld {
         vx: cos * sim.BULLET_SPEED * sim.DT,
         vy: sin * sim.BULLET_SPEED * sim.DT,
         ttl: sim.BULLET_LIFETIME_TICKS,
+        rewind: this.rewindFor(input),
       });
     }
   }
 
   /**
+   * 지연 보상(lag compensation) 되감기 양.
+   * 사수의 화면에서 다른 플레이어는 (보간 지연 + 네트워크 지연)만큼 과거 모습이다.
+   * 클라이언트가 보낸 rt(그때 화면에 그리던 서버 틱)와 처리 시점의 차이만큼 판정 시점을 되돌려
+   * "내 화면에서 맞혔으면 맞는다"를 보장한다. rt 는 조작 가능하므로 [0, LAG_COMP_MAX_TICKS] 로 제한.
+   */
+  private rewindFor(input: PlayerInput): number {
+    if (input.rt === undefined) return 0;
+    const r = this.tick - input.rt;
+    return r <= 0 ? 0 : Math.min(r, sim.LAG_COMP_MAX_TICKS);
+  }
+
+  /**
    * 탄환 이동은 연속 충돌 검사(swept test): 이번 틱의 이동 선분과
    * 벽/플레이어의 첫 교차 지점(t 최소)을 찾아 그 대상에만 적중시킨다.
+   * 지연 보상 탄은 플레이어를 현재 위치가 아니라 (현재 틱 - rewind) 시점 위치로 판정한다.
+   * 벽은 움직이지 않으므로 되감기와 무관하다.
    */
   private stepBullets() {
     const alive: Bullet[] = [];
@@ -166,8 +219,10 @@ export class GameWorld {
       let bestT = wallT < 0 ? Infinity : wallT;
       let victim: Entity | null = null;
       for (const e of this.entities.values()) {
-        if (!e.alive || e.eid === b.ownerEid) continue;
-        const t = sim.segmentCircleHit(b.x, b.y, x1, y1, e.x, e.y, BULLET_HIT_RADIUS);
+        if (!e.alive || e.eid === b.ownerEid) continue; // 지금 죽어 있는 대상은 과거 위치로도 맞지 않는다
+        const p = b.rewind > 0 ? this.positionAt(e, this.tick - b.rewind) : e;
+        if (!p) continue;
+        const t = sim.segmentCircleHit(b.x, b.y, x1, y1, p.x, p.y, BULLET_HIT_RADIUS);
         if (t >= 0 && t < bestT) {
           bestT = t;
           victim = e;
@@ -271,7 +326,7 @@ export class GameWorld {
     for (const e of this.entities.values()) {
       h.update(`|${e.playerId}:${e.x},${e.y},${e.hp},${e.alive},${e.score},${e.kills},${e.deaths},${e.dashCd}`);
     }
-    for (const b of this.bullets) h.update(`|b${b.id}:${b.x},${b.y}`);
+    for (const b of this.bullets) h.update(`|b${b.id}:${b.x},${b.y},${b.rewind}`);
     for (const o of this.orbs) h.update(`|o${o.id}:${o.x},${o.y},${o.active}`);
     return h.digest('hex').slice(0, 16);
   }

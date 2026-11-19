@@ -10,6 +10,7 @@ export interface InputMessage {
   aim: number;
   fire: boolean;
   dash: boolean;
+  rt?: number;
 }
 
 export type ClientMessage = { t: 'queue' } | { t: 'leave' } | { t: 'ping'; ts: number } | InputMessage;
@@ -44,6 +45,8 @@ export function parseClientMessage(raw: string): ClientMessage | null {
         aim: clamp(o.aim, -Math.PI * 4, Math.PI * 4),
         fire: o.fire === true,
         dash: o.dash === true,
+        // 지연 보상용 시점. 없거나 이상하면 보상 없이 처리 (범위 제한은 GameWorld 가 서버 틱 기준으로 수행)
+        ...(isNum(o.rt) && o.rt >= 0 ? { rt: o.rt } : {}),
       };
     }
     default:

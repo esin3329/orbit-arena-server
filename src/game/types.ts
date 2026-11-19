@@ -17,4 +17,6 @@ export interface PlayerInput {
   aim: number;
   fire: boolean;
   dash: boolean;
+  /** 입력 당시 클라이언트가 화면에 그리던 서버 틱 (지연 보상용, 선택) */
+  rt?: number;
 }

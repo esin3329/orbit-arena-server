@@ -24,7 +24,7 @@ let lagMs = 0;
 let rtt = 0;
 let queued = false;
 
-const opts = { predict: true, interp: true, ghost: false };
+const opts = { predict: true, interp: true, ghost: false, lagcomp: true };
 
 const G = {
   active: false,
@@ -352,6 +352,7 @@ $('lag').addEventListener('change', (/** @type {any} */ e) => (lagMs = Number(e.
 $('opt-predict').addEventListener('change', (/** @type {any} */ e) => (opts.predict = e.target.checked));
 $('opt-interp').addEventListener('change', (/** @type {any} */ e) => (opts.interp = e.target.checked));
 $('opt-ghost').addEventListener('change', (/** @type {any} */ e) => (opts.ghost = e.target.checked));
+$('opt-lagcomp').addEventListener('change', (/** @type {any} */ e) => (opts.lagcomp = e.target.checked));
 
 /** 30Hz 고정 주기 입력 생성 + 로컬 예측 */
 function inputTick() {
@@ -367,7 +368,9 @@ function inputTick() {
     fire: mouseDown,
     dash: k('Space', 'ShiftLeft'),
   };
-  send({ t: 'input', ...input });
+  // 지연 보상: 지금 화면에 그리고 있는 서버 틱을 함께 보내면, 서버가 그 시점으로 되감아 탄 판정을 한다
+  const rt = opts.lagcomp ? viewTick() : null;
+  send(rt === null ? { t: 'input', ...input } : { t: 'input', ...input, rt: Math.round(rt * 100) / 100 });
   if (G.pred.alive) sim.stepMovement(G.pred, input);
   G.pred.aim = input.aim;
   G.pending.push(input);
@@ -459,6 +462,13 @@ function renderSelfPos() {
   if (opts.predict && G.pred) return { x: G.pred.x + G.correction.x, y: G.pred.y + G.correction.y };
   const s = G.serverMe ?? G.pred;
   return s ? { x: s.x, y: s.y } : { x: 0, y: 0 };
+}
+
+/** 다른 플레이어를 현재 화면에 그리고 있는 서버 틱 (sampleWorld 가 고르는 시점과 동일) */
+function viewTick() {
+  const w = sampleWorld();
+  if (!w) return null;
+  return w.a.tick + (w.b.tick - w.a.tick) * w.t;
 }
 
 /** 렌더 시점(서버 시간 - INTERP_DELAY)을 감싸는 두 스냅샷을 찾아 보간 */

@@ -37,11 +37,21 @@ export const ORB_RADIUS = 10;
 export const ORB_COUNT = 14;
 export const RESPAWN_TICKS = 60;
 
+/**
+ * 지연 보상 최대 되감기 시간. 클라이언트가 rt 를 조작해도 이 이상은 과거로 갈 수 없다.
+ * 값이 클수록 고지연 사수에게 유리하고 피격자는 "이미 숨었는데 맞는" 체감이 커지는 트레이드오프.
+ */
+export const LAG_COMP_MAX_MS = 250;
+export const LAG_COMP_MAX_TICKS = Math.round(LAG_COMP_MAX_MS / TICK_MS);
+
 export const KILL_SCORE = 10;
 export const ORB_SCORE = 1;
 
 /** @typedef {{ x: number, y: number, w: number, h: number }} Rect */
-/** @typedef {{ seq: number, dx: number, dy: number, aim: number, fire: boolean, dash: boolean }} PlayerInput */
+/**
+ * rt: 입력을 만들 때 클라이언트 화면에 보이던 서버 틱(보간 시점, 소수 가능) — 지연 보상에 사용
+ * @typedef {{ seq: number, dx: number, dy: number, aim: number, fire: boolean, dash: boolean, rt?: number }} PlayerInput
+ */
 /** @typedef {{ x: number, y: number, dashTicks: number, dashCd: number }} MoveState */
 
 /**
