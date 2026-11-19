@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
+import { PROTOCOL_VERSION } from '../shared/sim.js';
 import { createApp, type App } from '../src/app.ts';
 
 process.env.LOG_LEVEL ??= 'silent';
@@ -61,14 +62,14 @@ test('REST: 닉네임 검증, 인증 필요한 엔드포인트, 헬스체크', a
 });
 
 test('WS: 토큰 없으면 핸드셰이크 단계에서 401 거부', async () => {
-  const ws = new WebSocket(`${wsBase}/ws?token=invalid`);
+  const ws = new WebSocket(`${wsBase}/ws?v=${PROTOCOL_VERSION}&token=invalid`);
   const status = await new Promise<number>((resolve) => ws.on('unexpected-response', (_req, res) => resolve(res.statusCode!)));
   assert.equal(status, 401);
 });
 
 test('E2E: 접속 → 매칭(봇 채움) → 스냅샷 수신 → 매치 종료 → 리더보드 반영', async () => {
   const { token, player } = await guest('E2E');
-  const ws = new WebSocket(`${wsBase}/ws?token=${token}`);
+  const ws = new WebSocket(`${wsBase}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
   const welcome = await waitFor(ws, 'welcome');
   assert.equal(welcome.playerId, player.id);
 
@@ -97,11 +98,20 @@ test('E2E: 접속 → 매칭(봇 채움) → 스냅샷 수신 → 매치 종료 
 
 test('WS: 같은 계정으로 재접속하면 이전 연결은 4001 로 종료', async () => {
   const { token } = await guest('Dup');
-  const ws1 = new WebSocket(`${wsBase}/ws?token=${token}`);
+  const ws1 = new WebSocket(`${wsBase}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
   await waitFor(ws1, 'welcome');
   const closed = new Promise<number>((r) => ws1.on('close', (code) => r(code)));
-  const ws2 = new WebSocket(`${wsBase}/ws?token=${token}`);
+  const ws2 = new WebSocket(`${wsBase}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
   await waitFor(ws2, 'welcome');
   assert.equal(await closed, 4001);
   ws2.close();
+});
+
+test('WS: 프로토콜 버전이 다르면 426 거부, /health 에 서버 버전 노출', async () => {
+  const { token } = await guest('OldClient');
+  const ws = new WebSocket(`${wsBase}/ws?v=${PROTOCOL_VERSION - 1}&token=${token}`);
+  const status = await new Promise<number>((resolve) => ws.on('unexpected-response', (_req, res) => resolve(res.statusCode!)));
+  assert.equal(status, 426);
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.equal(health.protocolVersion, PROTOCOL_VERSION);
 });

@@ -7,6 +7,7 @@ import type { Repository } from '../db/types.ts';
 import type { Matchmaker } from '../game/matchmaker.ts';
 import { errorFields, logger } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
+import { PROTOCOL_VERSION } from '../../shared/sim.js';
 import { KeyedRateLimiter } from '../util/rateLimiter.ts';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -93,7 +94,13 @@ export function createHttpHandler(deps: ApiDeps) {
 
     if (pathname === '/health') {
       const dbOk = await repo.ping().catch(() => false);
-      return json(res, dbOk ? 200 : 503, { status: dbOk ? 'ok' : 'degraded', db: repo.driver, dbOk, uptimeSec: Math.round(process.uptime()) });
+      return json(res, dbOk ? 200 : 503, {
+        status: dbOk ? 'ok' : 'degraded',
+        db: repo.driver,
+        dbOk,
+        protocolVersion: PROTOCOL_VERSION,
+        uptimeSec: Math.round(process.uptime()),
+      });
     }
     if (pathname === '/metrics') {
       res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });

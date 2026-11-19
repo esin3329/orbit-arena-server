@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { config as baseConfig, type Config, type MatchConfig } from './config.ts';
+import { config as baseConfig, validateConfig, type Config, type MatchConfig } from './config.ts';
 import { createRepository } from './db/index.ts';
 import type { Repository } from './db/types.ts';
 import { Matchmaker } from './game/matchmaker.ts';
@@ -21,6 +21,8 @@ export interface App {
 /** 조립(composition root): 설정 → 저장소 → 매치메이커 → HTTP/WS 서버 */
 export async function createApp(overrides: AppOverrides = {}): Promise<App> {
   const cfg: Config = { ...baseConfig, ...overrides, match: { ...baseConfig.match, ...overrides.match } };
+  const errors = validateConfig(cfg);
+  if (errors.length) throw new Error(`invalid configuration:\n  - ${errors.join('\n  - ')}`);
   const repo = await createRepository(cfg);
   const matchmaker = new Matchmaker(repo, cfg.match, cfg.snapshotEvery);
 

@@ -166,9 +166,11 @@ function setQueued(/** @type {boolean} */ v, text = '') {
 function connect() {
   if (!token) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`);
+  const sock = new WebSocket(`${proto}://${location.host}/ws?v=${sim.PROTOCOL_VERSION}&token=${encodeURIComponent(token)}`);
   ws = sock;
+  let opened = false;
   sock.onopen = () => {
+    opened = true;
     reconnectDelay = 500;
     setBadge(true);
   };
@@ -185,10 +187,38 @@ function connect() {
       return;
     }
     if (ev.code === 1000 || !token) return;
-    // 지수 백오프 재접속 — 서버는 유예 시간 동안 매치 자리를 유지한다
-    setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+    // 핸드셰이크 단계 실패(401/426)는 브라우저가 코드를 알려주지 않으므로 원인을 직접 확인한다
+    const retry = () => {
+      // 지수 백오프 재접속 — 서버는 유예 시간 동안 매치 자리를 유지한다
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+    };
+    if (opened) return retry();
+    diagnoseHandshake().then((cause) => {
+      if (cause === 'version') {
+        $('queue-status').textContent = '서버가 새 버전으로 업데이트되었습니다. 페이지를 새로고침하세요.';
+      } else if (cause === 'auth') {
+        localStorage.removeItem('oa_token');
+        token = null;
+        me = null;
+        renderProfile();
+        $('login-error').textContent = '세션이 만료되었습니다. 다시 로그인하세요.';
+      } else retry();
+    });
   };
+}
+
+/** @returns {Promise<'version' | 'auth' | 'network'>} */
+async function diagnoseHandshake() {
+  try {
+    const health = await (await fetch('/health')).json();
+    if (health.protocolVersion !== sim.PROTOCOL_VERSION) return 'version';
+    const res = await fetch('/api/me', { headers: { authorization: `Bearer ${token}` } });
+    if (res.status === 401) return 'auth';
+  } catch {
+    /* 서버 다운 등 — 재시도 */
+  }
+  return 'network';
 }
 
 function setBadge(/** @type {boolean} */ on) {

@@ -4,11 +4,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { verifyToken, type TokenPayload } from '../auth/token.ts';
 import type { Matchmaker } from '../game/matchmaker.ts';
 import type { PlayerConnection } from '../game/types.ts';
-import { TICK_RATE } from '../../shared/sim.js';
-import { logger } from '../util/logger.ts';
+import { PROTOCOL_VERSION, TICK_RATE } from '../../shared/sim.js';
+import { errorFields, logger } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
 import { TokenBucket } from '../util/rateLimiter.ts';
-import { parseClientMessage } from './protocol.ts';
+import { parseClientMessage, type ClientMessage } from './protocol.ts';
 
 const HEARTBEAT_MS = 10_000;
 /** 송신 버퍼가 이 크기를 넘으면 스냅샷을 건너뛴다 */
@@ -59,6 +59,11 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws') return reject(socket, 404, 'Not Found');
+    // 배포 직후 캐시된 구버전 클라이언트가 바뀐 메시지 형식으로 오동작하지 않도록 핸드셰이크에서 차단
+    if (url.searchParams.get('v') !== String(PROTOCOL_VERSION)) {
+      metrics.inc('ws_protocol_mismatch_total');
+      return reject(socket, 426, 'Upgrade Required');
+    }
     const payload = verifyToken(url.searchParams.get('token') ?? '', secret);
     if (!payload) {
       metrics.inc('ws_auth_failures_total');
@@ -74,7 +79,7 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
     const conn = new WsConnection(ws, payload);
     sessions.set(conn.playerId, conn);
     metrics.inc('ws_connections_total');
-    conn.send(JSON.stringify({ t: 'welcome', playerId: conn.playerId, nickname: conn.nickname, tickRate: TICK_RATE }));
+    conn.send(JSON.stringify({ t: 'welcome', playerId: conn.playerId, nickname: conn.nickname, tickRate: TICK_RATE, pv: PROTOCOL_VERSION }));
 
     // 진행 중인 매치가 있으면 자동 재접속
     matchmaker.roomOf(conn.playerId)?.rebind(conn.playerId, conn);
@@ -95,19 +100,12 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
         metrics.inc('ws_bad_messages_total');
         return;
       }
-      switch (msg.t) {
-        case 'input':
-          matchmaker.roomOf(conn.playerId)?.pushInput(conn.playerId, msg);
-          break;
-        case 'ping':
-          conn.send(`{"t":"pong","ts":${msg.ts},"st":${Date.now()}}`);
-          break;
-        case 'queue':
-          matchmaker.enqueue(conn);
-          break;
-        case 'leave':
-          matchmaker.leave(conn);
-          break;
+      // 이벤트 리스너에서 던져진 예외는 프로세스를 종료시킨다 → 메시지 1개의 문제는 그 메시지에서 끝낸다
+      try {
+        dispatch(conn, msg);
+      } catch (err) {
+        metrics.inc('ws_handler_errors_total');
+        logger.error('ws message handler failed', { playerId: conn.playerId, t: msg.t, ...errorFields(err) });
       }
     });
 
@@ -118,6 +116,23 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
     });
 
     ws.on('error', (err) => logger.warn('ws error', { playerId: conn.playerId, err: err.message }));
+  }
+
+  function dispatch(conn: WsConnection, msg: ClientMessage) {
+    switch (msg.t) {
+      case 'input':
+        matchmaker.roomOf(conn.playerId)?.pushInput(conn.playerId, msg);
+        break;
+      case 'ping':
+        conn.send(`{"t":"pong","ts":${msg.ts},"st":${Date.now()}}`);
+        break;
+      case 'queue':
+        matchmaker.enqueue(conn);
+        break;
+      case 'leave':
+        matchmaker.leave(conn);
+        break;
+    }
   }
 
   const heartbeat = setInterval(() => {

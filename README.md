@@ -19,14 +19,17 @@ WASD 이동 · 마우스 조준 · 클릭 사격 · Space 대시 · Esc 나가�
 | **게임 루프** | 30Hz 고정 타임스텝 + 누산기(accumulator). `setTimeout` 지터가 있어도 장기적으로 정확한 틱레이트를 유지하고, 밀린 틱은 최대 5개까지만 따라잡아 *spiral of death*를 막음 |
 | **넷코드** | 클라이언트 예측(prediction) → 서버 ack 기반 보정(reconciliation) → 오차를 지수 감쇠로 부드럽게 흡수. 다른 플레이어는 서버 틱 시계 기준 110ms 과거를 **보간(interpolation)** |
 | **결정적 공유 시뮬레이션** | `shared/sim.js`를 서버(TS import)와 브라우저(ES module)가 그대로 사용. 테스트로 *서버 결과 == 클라이언트 예측* **완전 일치**를 검증 |
+| **계층 분리 · 리플레이** | `GameWorld`(순수 규칙, I/O 없음) ↔ `Room`(세션·루프·네트워크·영속화) 분리. 룸마다 **시드 RNG**를 써서 *같은 시드 + 같은 입력 로그 → 같은 상태 해시*를 테스트로 보장. 크래시 로그에 시드·틱이 남아 재현 가능 |
+| **연속 충돌 검사** | 탄환은 틱당 ~27px 이동하므로 끝점 검사로는 가장자리를 스치는 탄이 빠져나감(터널링). 이동 **선분 vs 원/사각형(Liang–Barsky)** 교차로 첫 충돌 대상을 판정. 같은 함수로 봇 시야(LoS) 판정 |
 | **치트 방지** | 입력 값 검증·clamp, seq 역순/중복 거부(리플레이 방지), **틱당 입력 예산(1.05/tick)** 으로 입력을 몰아 보내는 스피드핵 차단, 사격 쿨다운은 서버에서만 판정 |
 | **매치메이킹** | 대기열 → 풀방 즉시 시작 / 대기 시간 초과 시 **봇 채움** / 진행 중 매치 **난입(late join)** 시 봇 자리를 사람에게 양보 |
-| **세션 관리** | HTTP Upgrade 단계에서 토큰 검증(미인증은 핸드셰이크 전 401), 중복 접속 시 이전 연결 4001 종료, ping/pong 하트비트로 half-open 연결 정리 |
+| **세션 관리** | HTTP Upgrade 단계에서 토큰·**프로토콜 버전** 검증(미인증 401, 구버전 클라이언트 426 → 새로고침 안내), 중복 접속 시 이전 연결 4001 종료, ping/pong 하트비트로 half-open 연결 정리 |
 | **재접속** | 연결이 끊겨도 10초간 자리 유지 → 새로고침해도 **같은 매치로 복귀**(점수·위치 유지), 클라이언트는 지수 백오프로 재연결 |
 | **백프레셔** | 소켓 송신 버퍼가 128KB를 넘으면 해당 클라이언트 스냅샷을 건너뜀(느린 소비자가 서버 메모리를 잡아먹지 않도록) |
 | **직렬화 최적화** | 스냅샷 공통 본문은 1회만 `JSON.stringify`, 플레이어별로 다른 `ack`만 문자열 결합 → 룸당 O(N) |
-| **영속화** | Repository 인터페이스로 **SQLite ↔ Supabase** 교체. 매치 결과 + 누적 스탯 + 레이팅 갱신을 **하나의 트랜잭션**으로 처리. DB 장애가 나도 게임은 계속 진행 |
+| **영속화** | Repository 인터페이스로 **SQLite ↔ Supabase** 교체. 매치 결과 + 누적 스탯 + 레이팅 갱신을 **하나의 트랜잭션**으로 처리. 일시 장애는 **지수 백오프 재시도**(matchId PK로 멱등), 그래도 실패하면 게임은 계속 진행 |
 | **레이팅** | 다인전 Elo(모든 참가자 쌍을 1:1로 보고 평균). 봇은 레이팅 계산에서 제외(봇 파밍 방지), 중도 이탈도 기록(패배 회피 방지) |
+| **장애 격리** | 틱 처리 중 예외는 그 룸만 `error`로 종료(결과 전송·저장)하고 다른 매치는 계속. WS 메시지 핸들러 예외도 메시지 단위로 격리. 잘못된 설정은 **기동 시점에 실패**(운영에서 기본/짧은 시크릿 거부) |
 | **운영** | 구조화 JSON 로그, Prometheus `/metrics`(틱 p50/p99, 드롭된 스냅샷, DB 오류 등), `/health`, Graceful shutdown 시 진행 중 매치 결과를 저장한 뒤 종료 |
 | **의존성 최소화** | 런타임 의존성은 `ws`와(선택) `@supabase/supabase-js` 뿐. 웹 프레임워크·ORM·빌드 단계 없음 (Node 24 타입 스트리핑으로 `.ts` 직접 실행, `node:sqlite` 내장 모듈 사용) |
 
@@ -54,16 +57,17 @@ flowchart LR
   R -.DB_DRIVER=supabase.-> SB[(Supabase<br/>PostgreSQL)]
 
   UI -- "POST /api/auth/guest<br/>GET /api/leaderboard" --> H
-  C == "WebSocket /ws?token=…<br/>input 30Hz ↑ / snapshot 15Hz ↓" ==> G
+  C == "WebSocket /ws?v=2&token=…<br/>input 30Hz ↑ / snapshot 15Hz ↓" ==> G
 ```
 
-### 한 틱에서 일어나는 일 (`src/game/room.ts`)
+### 한 틱에서 일어나는 일 (`Room` → `GameWorld`)
 
-1. 플레이어별 입력 큐에서 **입력 예산만큼** 꺼내 `sim.stepMovement()` 적용 (봇도 같은 파이프라인)
-2. 탄환 이동 → 장애물/플레이어 충돌 → 피격·사망·킬 점수
-3. 오브 획득·재생성, 리스폰, 재접속 유예 만료 처리
-4. 2틱마다 스냅샷 브로드캐스트 (`ack` = 그 플레이어의 마지막 처리 입력 seq)
-5. 시간이 다 되면 순위 계산 → DB 트랜잭션 → `match_end` 전송
+1. `Room`: 좌석별 `InputBuffer`에서 **입력 예산만큼** 꺼냄 (봇은 `BotBrain`이 입력을 만들어 같은 버퍼로)
+2. `GameWorld.step(inputs)`: `sim.stepMovement()` 이동·사격 (순수 함수, 네트워크/DB 모름)
+3. 탄환 스윕 충돌(벽/플레이어 중 가장 먼저 닿는 대상) → 피격·사망·킬 점수
+4. 오브 획득·재생성, 리스폰 → `Room`: 재접속 유예 만료 처리
+5. 2틱마다 스냅샷 브로드캐스트 (`ack` = 그 플레이어의 마지막 처리 입력 seq)
+6. 시간이 다 되면 순위 계산(`ranking.ts`) → DB 트랜잭션(재시도) → `match_end` 전송
 
 ### 클라이언트 예측 & 보정 흐름
 
@@ -114,8 +118,10 @@ docker build -t orbit-arena .
 ```
 
 ```bash
-docker run -p 3000:3000 -e TOKEN_SECRET=change-me -v orbit-data:/app/data orbit-arena
+docker run -p 3000:3000 -e TOKEN_SECRET="$(openssl rand -hex 32)" -v orbit-data:/app/data orbit-arena
 ```
+
+이미지는 `NODE_ENV=production`으로 돌기 때문에, `TOKEN_SECRET`이 없거나 32자보다 짧으면 서버가 기동하지 않습니다(fail fast).
 
 ---
 
@@ -171,7 +177,7 @@ match_players  (match_id, player_id, nickname, score, kills, deaths, placement, 
 
 모든 `/api/*`는 IP별 토큰 버킷 레이트 리밋이 적용됩니다.
 
-### WebSocket `/ws?token=…`
+### WebSocket `/ws?v=<PROTOCOL_VERSION>&token=…`
 
 | 방향 | 메시지 |
 |---|---|
@@ -179,6 +185,8 @@ match_players  (match_id, player_id, nickname, score, kills, deaths, placement, 
 | S→C | `welcome` · `queued` · `match_start{you,roster,remainingTicks}` · `roster` · `snap{ack,d:{tick,rem,p,b,o,ev}}` · `match_end{results}` · `pong` · `left` · `error` |
 
 스냅샷 `p`는 대역폭을 줄이려고 객체 대신 튜플 배열 `[eid,x,y,hp,alive,score,aim,dashTicks,dashCd,kills,deaths]`을 씁니다.
+
+핸드셰이크 거부: `401` 토큰 무효/만료 · `426` 프로토콜 버전 불일치 (`/health`의 `protocolVersion`으로 원인 확인)
 
 WS 종료 코드: `4001` 다른 곳에서 접속 · `4008` 레이트 리밋 초과 · `1001` 서버 종료
 
@@ -212,29 +220,47 @@ node scripts/loadtest.ts 256 20
 ## 프로젝트 구조
 
 ```
-shared/sim.js          서버·클라이언트 공용 결정적 시뮬레이션 (이동, 충돌, 상수)
+shared/sim.js          서버·클라이언트 공용 결정적 시뮬레이션 (이동, 충돌, 스윕 판정, 상수, 프로토콜 버전)
 src/
   server.ts            엔트리포인트 + graceful shutdown
   app.ts               조립(composition root): 설정 → DB → 매치메이커 → HTTP/WS
-  config.ts            환경변수 설정
+  config.ts            환경변수 설정 + 기동 시 검증(fail fast)
   auth/token.ts        HMAC-SHA256 서명 토큰 (상수 시간 비교)
   net/gateway.ts       WS 업그레이드 인증, 세션, 하트비트, 레이트 리밋, 메시지 라우팅
   net/protocol.ts      클라이언트 메시지 검증
-  game/room.ts         30Hz 권위 시뮬레이션, 스냅샷, 결과 집계
+  game/world.ts        순수 게임 규칙(이동·탄환·오브·리스폰), 상태 해시 — I/O 없음
+  game/room.ts         세션 계층: 좌석·재접속, 30Hz 루프, 장애 격리, 스냅샷, 결과 저장
+  game/inputBuffer.ts  플레이어별 입력 파이프라인 (seq 검증, 큐 상한, 틱당 예산)
+  game/ranking.ts      경쟁 순위(1224) 계산
   game/matchmaker.ts   대기열, 봇 채움, 난입, 룸 수명주기
   game/bot.ts          봇 AI (사람과 같은 입력 파이프라인 사용)
   db/                  Repository 인터페이스, SQLite·Supabase 구현, Elo 레이팅
   http/api.ts          REST API + 정적 파일 (경로 탈출 방지)
-  util/                JSON 로거, 토큰 버킷, Prometheus 메트릭
+  util/                JSON 로거, 토큰 버킷, Prometheus 메트릭, 시드 RNG, 재시도
 public/                브라우저 클라이언트 (Canvas, 빌드 없음)
 supabase/migrations/   Postgres 스키마, RLS, record_match() 함수
 test/                  단위·룸·통합(E2E) 테스트 — node:test
 scripts/loadtest.ts    부하 테스트
+.github/workflows/     CI: typecheck → test → Docker 빌드 + /health 스모크 테스트
 ```
 
 ## 테스트
 
-`node:test` 19개: 시뮬레이션 결정성, 충돌, **서버==예측 일치**, 입력 예산(스피드핵), seq 리플레이 거부, 사격→사망→리스폰, 재접속 유예, 매치 종료→DB→레이팅, 토큰 변조/만료, 레이트 리밋, 프로토콜 검증, REST 인증, WS 401 거부, 중복 접속 4001, **E2E(로그인→매칭→스냅샷→종료→리더보드)**.
+```bash
+npm run check   # tsc + 테스트
+```
+
+`node:test` 30개, GitHub Actions에서 push/PR마다 실행됩니다.
+
+- **시뮬레이션:** 결정성, 충돌, **서버==예측 일치**, 선분-원/사각형 교차(터널링 방지), 가장자리를 스치는 탄 적중
+- **리플레이:** 같은 시드 + 같은 입력 로그 600틱 → **상태 해시 일치**. 이 테스트로 봇 ID가 `randomUUID()`라 결정성이 깨지던 문제를 찾아 고쳤습니다.
+- **안티치트:** 입력 예산(4배 입력 공격 시 처리율 제한), seq 리플레이 거부
+- **게임 흐름:** 사격→사망→리스폰, 재접속 유예, 같은 매치 재입장 시 기록 복원(+DB 중복 저장 방지)
+- **장애 대응:** 틱 예외 시 룸 격리 종료, DB 일시 장애 재시도
+- **영속화:** 매치 종료→DB→레이팅, 경쟁 순위
+- **보안·설정:** 토큰 변조/만료, 레이트 리밋, 프로토콜 검증, 설정 검증(운영 시크릿)
+- **HTTP/WS:** REST 인증, WS 401 거부, 프로토콜 버전 426 거부, 중복 접속 4001
+- **E2E:** 로그인→매칭→스냅샷→종료→리더보드
 
 ---
 

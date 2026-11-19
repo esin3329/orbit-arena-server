@@ -1,4 +1,4 @@
-import { ORB_RADIUS } from '../../shared/sim.js';
+import { ORB_RADIUS, segmentObstacleHit } from '../../shared/sim.js';
 import type { PlayerInput } from './types.ts';
 
 export interface BotView {
@@ -56,7 +56,9 @@ export class BotBrain {
     if (target && best < 520) {
       const ang = Math.atan2(target.y - self.y, target.x - self.x);
       input.aim = ang + (this.rand() - 0.5) * 0.3; // 의도적인 조준 오차
-      input.fire = best < 470 && this.rand() < 0.55;
+      // 시야(line of sight)가 막혀 있으면 쏘지 않는다 — 벽에 탄을 낭비하는 부자연스러운 행동 방지
+      const los = segmentObstacleHit(self.x, self.y, target.x, target.y) < 0;
+      input.fire = los && best < 470 && this.rand() < 0.55;
       const radial = best > 300 ? 1 : best < 180 ? -1 : 0;
       input.dx = Math.cos(ang) * radial + Math.cos(ang + Math.PI / 2) * this.strafe * 0.8;
       input.dy = Math.sin(ang) * radial + Math.sin(ang + Math.PI / 2) * this.strafe * 0.8;

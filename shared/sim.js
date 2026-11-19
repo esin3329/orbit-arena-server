@@ -9,6 +9,9 @@
  * 브라우저에서 그대로 import 할 수 있도록 빌드 없는 순수 ES 모듈 + JSDoc 타입으로 작성했다.
  */
 
+/** 클라이언트/서버 메시지 형식이 바뀌면 올린다. 불일치 시 서버가 WS 업그레이드를 426 으로 거부 */
+export const PROTOCOL_VERSION = 2;
+
 export const TICK_RATE = 30;
 export const TICK_MS = 1000 / TICK_RATE;
 export const DT = 1 / TICK_RATE;
@@ -132,4 +135,68 @@ export function pointInObstacle(x, y, pad = 0) {
     if (x > o.x - pad && x < o.x + o.w + pad && y > o.y - pad && y < o.y + o.h + pad) return true;
   }
   return false;
+}
+
+/**
+ * 선분 P0→P1 이 원(c, r)에 처음 닿는 지점의 매개변수 t∈[0,1] 를 반환한다. 닿지 않으면 -1.
+ * 탄환은 한 틱에 ~27px 이동하므로 끝점만 검사하면 원 가장자리를 스치는 탄이 빠져나간다(터널링).
+ * 이동 구간 전체를 검사(swept test)해 이를 막는다.
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} cx
+ * @param {number} cy
+ * @param {number} r
+ */
+export function segmentCircleHit(x0, y0, x1, y1, cx, cy, r) {
+  const fx = x0 - cx;
+  const fy = y0 - cy;
+  const c = fx * fx + fy * fy - r * r;
+  if (c <= 0) return 0; // 시작점이 이미 원 안
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const a = dx * dx + dy * dy;
+  if (a === 0) return -1;
+  const b = 2 * (fx * dx + fy * dy);
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return -1;
+  const t = (-b - Math.sqrt(disc)) / (2 * a);
+  return t >= 0 && t <= 1 ? t : -1;
+}
+
+/**
+ * 선분 P0→P1 이 장애물(pad 만큼 부풀린 사각형)에 처음 닿는 t∈[0,1], 없으면 -1 (Liang–Barsky 클리핑).
+ * 탄환-벽 충돌과 봇의 시야(line of sight) 판정에 공용으로 쓴다.
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} [pad]
+ */
+export function segmentObstacleHit(x0, y0, x1, y1, pad = 0) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let best = -1;
+  for (const o of OBSTACLES) {
+    const p = [-dx, dx, -dy, dy];
+    const q = [x0 - (o.x - pad), o.x + o.w + pad - x0, y0 - (o.y - pad), o.y + o.h + pad - y0];
+    let t0 = 0;
+    let t1 = 1;
+    let hit = true;
+    for (let i = 0; i < 4 && hit; i++) {
+      if (p[i] === 0) {
+        if (q[i] < 0) hit = false; // 해당 축과 평행하고 슬랩 바깥
+        continue;
+      }
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) hit = false;
+        else if (t > t0) t0 = t;
+      } else if (t < t0) hit = false;
+      else if (t < t1) t1 = t;
+    }
+    if (hit && (best < 0 || t0 < best)) best = t0;
+  }
+  return best;
 }

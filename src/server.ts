@@ -1,8 +1,8 @@
 import { createApp } from './app.ts';
-import { config } from './config.ts';
+import { config, DEV_TOKEN_SECRET } from './config.ts';
 import { errorFields, logger } from './util/logger.ts';
 
-if (config.tokenSecret === 'dev-only-secret-change-me') {
+if (config.tokenSecret === DEV_TOKEN_SECRET) {
   logger.warn('TOKEN_SECRET 이 설정되지 않아 개발용 시크릿을 사용합니다. 운영 환경에서는 반드시 설정하세요.');
 }
 

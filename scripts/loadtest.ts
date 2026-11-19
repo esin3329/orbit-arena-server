@@ -5,6 +5,7 @@
  *   node scripts/loadtest.ts [clients=64] [seconds=20] [url=http://localhost:3000]
  */
 import WebSocket from 'ws';
+import { PROTOCOL_VERSION } from '../shared/sim.js';
 
 const N = Number(process.argv[2] ?? 64);
 const SECONDS = Number(process.argv[3] ?? 20);
@@ -27,7 +28,7 @@ async function bot(i: number) {
   const res = await fetch(`${BASE}/api/auth/guest`, { method: 'POST', body: JSON.stringify({ nickname: `load${i}` }) });
   if (!res.ok) throw new Error(`guest failed: ${res.status} ${await res.text()}`);
   const { token } = (await res.json()) as { token: string };
-  const ws = new WebSocket(`${WS_BASE}/ws?token=${token}`);
+  const ws = new WebSocket(`${WS_BASE}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
   let seq = 0;
   let lastSnap = 0;
   let angle = Math.random() * Math.PI * 2;

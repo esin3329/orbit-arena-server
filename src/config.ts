@@ -39,7 +39,7 @@ const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' &
 export const config: Config = {
   port: num(env.PORT, 3000),
   host: env.HOST ?? '0.0.0.0',
-  tokenSecret: env.TOKEN_SECRET ?? 'dev-only-secret-change-me',
+  tokenSecret: env.TOKEN_SECRET || 'dev-only-secret-change-me',
   tokenTtlSec: num(env.TOKEN_TTL_SEC, 60 * 60 * 24 * 7),
   dbDriver: env.DB_DRIVER === 'supabase' ? 'supabase' : 'sqlite',
   sqlitePath: env.SQLITE_PATH ?? 'data/game.db',
@@ -57,3 +57,38 @@ export const config: Config = {
     lateJoinMinRemainingSec: num(env.MATCH_LATE_JOIN_MIN_SEC, 30),
   },
 };
+
+export const DEV_TOKEN_SECRET = 'dev-only-secret-change-me';
+
+/**
+ * 설정 검증 — 잘못된 값으로 "조용히" 기동하는 대신 시작 시점에 실패한다(fail fast).
+ * 운영(NODE_ENV=production)에서는 기본 시크릿/짧은 시크릿을 거부한다.
+ */
+export function validateConfig(cfg: Config, nodeEnv = process.env.NODE_ENV): string[] {
+  const errors: string[] = [];
+  const int = (name: string, v: number, lo: number, hi: number) => {
+    if (!Number.isInteger(v) || v < lo || v > hi) errors.push(`${name} must be an integer in [${lo}, ${hi}] (got ${v})`);
+  };
+  int('PORT', cfg.port, 0, 65535);
+  int('TOKEN_TTL_SEC', cfg.tokenTtlSec, 60, 60 * 60 * 24 * 90);
+  int('SNAPSHOT_EVERY', cfg.snapshotEvery, 1, 30);
+  if (!(cfg.apiRatePerSec > 0)) errors.push('API_RATE_PER_SEC must be > 0');
+  if (!(cfg.guestRatePerMin > 0)) errors.push('GUEST_RATE_PER_MIN must be > 0');
+
+  const m = cfg.match;
+  int('MATCH_DURATION_SEC', m.durationSec, 1, 3600);
+  int('MATCH_MAX_PLAYERS', m.maxPlayers, 2, 32);
+  int('MATCH_BOT_FILL_TO', m.botFillTo, 0, m.maxPlayers);
+  int('MATCH_BOT_FILL_AFTER_MS', m.botFillAfterMs, 0, 600_000);
+  int('MATCH_RECONNECT_GRACE_MS', m.reconnectGraceMs, 0, 600_000);
+  if (!(m.lateJoinMinRemainingSec >= 0)) errors.push('MATCH_LATE_JOIN_MIN_SEC must be >= 0');
+
+  if (cfg.dbDriver === 'supabase' && (!cfg.supabaseUrl || !cfg.supabaseKey)) {
+    errors.push('DB_DRIVER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+  }
+  if (nodeEnv === 'production') {
+    if (cfg.tokenSecret === DEV_TOKEN_SECRET) errors.push('TOKEN_SECRET must be set in production');
+    else if (cfg.tokenSecret.length < 32) errors.push('TOKEN_SECRET must be at least 32 characters in production');
+  }
+  return errors;
+}
