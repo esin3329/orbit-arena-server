@@ -7,6 +7,7 @@ import { Matchmaker } from './game/matchmaker.ts';
 import { createHttpHandler } from './http/api.ts';
 import { attachGateway } from './net/gateway.ts';
 import { metrics } from './util/metrics.ts';
+import { createGitHubAuth } from './auth/github.ts';
 
 export type AppOverrides = Partial<Omit<Config, 'match'>> & { match?: Partial<MatchConfig> };
 
@@ -24,6 +25,9 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
   const errors = validateConfig(cfg);
   if (errors.length) throw new Error(`invalid configuration:\n  - ${errors.join('\n  - ')}`);
   const repo = await createRepository(cfg);
+  const github = cfg.githubAuthOrigin && cfg.supabaseUrl && cfg.supabasePublishableKey && 'getOrCreateGitHubPlayer' in repo
+    ? { ...createGitHubAuth(cfg.supabaseUrl, cfg.supabasePublishableKey, cfg.githubAuthOrigin), getPlayer: repo.getOrCreateGitHubPlayer.bind(repo) }
+    : undefined;
   const matchmaker = new Matchmaker(repo, cfg.match, cfg.snapshotEvery);
 
   let onlineCount = () => 0;
@@ -35,6 +39,7 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
       tokenTtlSec: cfg.tokenTtlSec,
       apiRatePerSec: cfg.apiRatePerSec,
       guestRatePerMin: cfg.guestRatePerMin,
+      github,
       onlineCount: () => onlineCount(),
     }),
   );

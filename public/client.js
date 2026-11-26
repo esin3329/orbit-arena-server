@@ -128,6 +128,19 @@ function renderProfile() {
     .join('');
 }
 
+$('github-login-btn').addEventListener('click', async () => {
+  const button = $('github-login-btn');
+  button.disabled = true;
+  $('login-error').textContent = '';
+  try {
+    const res = await api('/api/auth/github', { method: 'POST' });
+    location.assign(res.url);
+  } catch {
+    $('login-error').textContent = 'GitHub 로그인을 시작하지 못했습니다.';
+    button.disabled = false;
+  }
+});
+
 $('login-form').addEventListener('submit', async (/** @type {Event} */ e) => {
   e.preventDefault();
   $('login-error').textContent = '';
@@ -719,7 +732,25 @@ function renderHud(/** @type {number} */ now) {
 
 // ─────────────────────────── 시작 ───────────────────────────
 async function init() {
-  if (token) {
+  const url = new URL(location.href);
+  const github = url.searchParams.get('github');
+  if (github) {
+    url.searchParams.delete('github');
+    history.replaceState(null, '', url);
+    try {
+      if (github !== 'ok') throw new Error();
+      const res = await api('/api/auth/github/session', { method: 'POST' });
+      token = res.token;
+      me = res.player;
+      localStorage.setItem('oa_token', /** @type {string} */ (token));
+    } catch {
+      $('login-error').textContent = 'GitHub 로그인을 완료하지 못했습니다. 다시 시도하세요.';
+    }
+  }
+  void api('/api/auth/providers').then((res) => {
+    $('github-login-btn').hidden = !res.github;
+  }).catch(() => {});
+  if (token && !me) {
     try {
       me = (await api('/api/me')).player;
     } catch {

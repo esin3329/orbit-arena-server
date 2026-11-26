@@ -24,6 +24,8 @@ export interface Config {
   sqlitePath: string;
   supabaseUrl?: string;
   supabaseKey?: string;
+  supabasePublishableKey?: string;
+  githubAuthOrigin?: string;
   /** N틱마다 스냅샷 전송 (30Hz 틱 / 2 = 15Hz 스냅샷) */
   snapshotEvery: number;
   /** IP 당 REST 요청 허용량(초당) */
@@ -45,6 +47,8 @@ export const config: Config = {
   sqlitePath: env.SQLITE_PATH ?? 'data/game.db',
   supabaseUrl: env.SUPABASE_URL,
   supabaseKey: env.SUPABASE_SERVICE_ROLE_KEY,
+  supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY,
+  githubAuthOrigin: env.GITHUB_AUTH_ORIGIN || undefined,
   snapshotEvery: num(env.SNAPSHOT_EVERY, 2),
   apiRatePerSec: num(env.API_RATE_PER_SEC, 10),
   guestRatePerMin: num(env.GUEST_RATE_PER_MIN, 5),
@@ -85,6 +89,18 @@ export function validateConfig(cfg: Config, nodeEnv = process.env.NODE_ENV): str
 
   if (cfg.dbDriver === 'supabase' && (!cfg.supabaseUrl || !cfg.supabaseKey)) {
     errors.push('DB_DRIVER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+  }
+  if (cfg.githubAuthOrigin) {
+    const url = URL.parse(cfg.githubAuthOrigin);
+    if (!url || url.origin !== cfg.githubAuthOrigin || (
+      url.protocol !== 'https:' &&
+      (nodeEnv === 'production' || url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    )) {
+      errors.push('GITHUB_AUTH_ORIGIN must be an HTTPS origin or a loopback HTTP origin for development');
+    }
+    if (cfg.dbDriver !== 'supabase' || !cfg.supabasePublishableKey) {
+      errors.push('GitHub auth requires DB_DRIVER=supabase and SUPABASE_PUBLISHABLE_KEY');
+    }
   }
   if (nodeEnv === 'production') {
     if (cfg.tokenSecret === DEV_TOKEN_SECRET) errors.push('TOKEN_SECRET must be set in production');

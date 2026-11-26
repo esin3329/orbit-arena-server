@@ -15,7 +15,7 @@ import type {
  * - 매치 기록 + 스탯 갱신은 Postgres 함수 record_match() 하나로 처리해 원자성 보장
  *   (스키마: supabase/migrations/*.sql)
  */
-export async function createSupabaseRepository(url: string, serviceKey: string): Promise<Repository> {
+export async function createSupabaseRepository(url: string, serviceKey: string) {
   const { createClient } = await import('@supabase/supabase-js');
   const client = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   return new SupabaseRepository(client);
@@ -68,6 +68,13 @@ class SupabaseRepository implements Repository {
   async getPlayer(id: string): Promise<PlayerRecord | null> {
     const row = check(await this.sb.from('players').select(PLAYER_SELECT).eq('id', id).maybeSingle());
     return row ? mapPlayer(row as PlayerRow) : null;
+  }
+
+  async getOrCreateGitHubPlayer(authUserId: string, nickname: string): Promise<PlayerRecord> {
+    const id = check(await this.sb.rpc('get_or_create_github_player', { p_auth_user_id: authUserId, p_nickname: nickname })) as string;
+    const player = await this.getPlayer(id);
+    if (!player) throw new Error('GitHub player is missing');
+    return player;
   }
 
   async recordMatch(input: MatchRecordInput): Promise<MatchParticipantResult[]> {

@@ -188,6 +188,14 @@ DB_DRIVER=supabase SUPABASE_URL=https://xxxx.supabase.co SUPABASE_SERVICE_ROLE_K
 > `service_role` 키는 RLS를 우회하므로 **서버 환경변수에만** 두고 브라우저에 절대 노출하지 않습니다.
 > 클라이언트는 항상 게임 서버 REST API를 거쳐 데이터를 읽습니다.
 
+### GitHub 로그인
+
+1. GitHub OAuth App의 Authorization callback URL을 `https://<project-ref>.supabase.co/auth/v1/callback`으로 지정하고 Supabase의 GitHub 로그인 제공자에 Client ID와 Client Secret을 등록합니다.
+2. Supabase Auth의 Redirect URLs에 `<게임 서버 origin>/api/auth/github/callback`을 추가합니다. 로컬 예시는 `http://localhost:3000/api/auth/github/callback`입니다.
+3. DB 마이그레이션 적용 후 서버 환경변수에 `SUPABASE_PUBLISHABLE_KEY`와 `GITHUB_AUTH_ORIGIN`을 설정합니다. 서버는 PKCE로 인증 코드를 교환하고 게임 세션을 발급합니다.
+
+GitHub 로그인으로 만든 프로필은 같은 계정으로 다시 로그인하면 기존 레이팅과 전적을 불러옵니다. 게스트 프로필은 별도로 유지됩니다.
+
 ### Supabase 구현 검증
 
 Supabase 쪽 코드는 두 단계로 자동 검증합니다.
@@ -224,6 +232,7 @@ match_players  (match_id, player_id, nickname, score, kills, deaths, placement, 
 | Method | Path | 설명 |
 |---|---|---|
 | POST | `/api/auth/guest` | `{nickname}` → 게스트 계정 + 서명 토큰 발급 (IP당 분당 5회) |
+| GET | `/api/auth/providers` | GitHub 로그인 사용 여부 |
 | GET | `/api/me` | 내 정보 + 최근 전적 (Bearer 토큰) |
 | GET | `/api/leaderboard?limit=20` | 레이팅 순위 |
 | GET | `/api/matches/recent?limit=10` | 최근 매치 |
@@ -347,4 +356,3 @@ npm run check   # tsc + 테스트
 
 - **수평 확장**: 지금은 단일 프로세스입니다. 룸은 서로 독립적이므로 *룸 단위 샤딩*이 자연스럽습니다. 매치메이커를 Redis 대기열로 분리하고, 각 게임 서버가 룸을 맡고, 로드밸런서는 `roomId` 기반 sticky 라우팅을 하는 구조로 갈 수 있습니다. 이때 DB는 Supabase(Postgres)를 씁니다.
 - **실제 Supabase 프로젝트 E2E**: CI는 로컬 Supabase 스택으로 검증합니다. 호스팅 프로젝트(커넥션 풀러·네트워크 지연 포함)에서의 동작은 따로 확인해야 합니다.
-- **계정**: 현재는 게스트 토큰만 있습니다. Supabase Auth(OAuth)를 붙이면 토큰 검증을 Supabase JWT로 교체할 수 있습니다.
