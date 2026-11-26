@@ -37,6 +37,7 @@
           <form id="login-form">
             <input id="nick" maxlength="16" placeholder="닉네임 (2~16자)" autocomplete="off" required />
             <button type="submit" class="primary">게스트로 시작</button>
+            <button type="button" id="github-login-btn" class="ghost" hidden>GitHub로 로그인</button>
           </form>
           <p id="login-error" class="error"></p>
           <div id="profile" hidden>
@@ -47,7 +48,7 @@
             <dl id="me-stats" class="stats"></dl>
             <div class="row">
               <button id="play-btn" class="primary">매치 찾기</button>
-              <button id="logout-btn" class="ghost">닉네임 변경</button>
+              <button id="logout-btn" class="ghost">로그아웃</button>
             </div>
             <p id="queue-status" class="muted"></p>
           </div>

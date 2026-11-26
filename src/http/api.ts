@@ -3,12 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { issueToken, verifyToken } from '../auth/token.ts';
-import type { Repository } from '../db/types.ts';
+import type { PlayerRecord, Repository } from '../db/types.ts';
 import type { Matchmaker } from '../game/matchmaker.ts';
 import { errorFields, logger } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
 import { PROTOCOL_VERSION } from '../../shared/sim.js';
 import { KeyedRateLimiter } from '../util/rateLimiter.ts';
+import { GITHUB_CALLBACK, GITHUB_SESSION, type createGitHubAuth } from '../auth/github.ts';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const STATIC_DIRS: Record<string, string> = { '/shared/': join(ROOT, 'shared'), '/': join(ROOT, 'public') };
@@ -32,6 +33,7 @@ export interface ApiDeps {
   apiRatePerSec: number;
   guestRatePerMin: number;
   onlineCount: () => number;
+  github?: ReturnType<typeof createGitHubAuth> & { getPlayer(id: string, nickname: string): Promise<PlayerRecord> };
 }
 
 class HttpError extends Error {
@@ -69,6 +71,18 @@ const clampLimit = (v: string | null, d: number, max: number) => {
   const n = Number(v ?? d);
   return Number.isInteger(n) && n > 0 ? Math.min(n, max) : d;
 };
+
+const VERIFIER_COOKIE = 'oa_github_pkce';
+const SESSION_COOKIE = 'oa_github_session';
+
+function readCookie(req: IncomingMessage, name: string) {
+  const prefix = name + '=';
+  return req.headers.cookie?.split(';').map((value) => value.trim()).find((value) => value.startsWith(prefix))?.slice(prefix.length);
+}
+
+function authCookie(name: string, value: string, age: number, secure: boolean) {
+  return `${name}=${value}; Path=/; Max-Age=${age}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
+}
 
 export function createHttpHandler(deps: ApiDeps) {
   const { repo, matchmaker, secret } = deps;
@@ -111,6 +125,52 @@ export function createHttpHandler(deps: ApiDeps) {
     if (pathname.startsWith('/api/')) {
       if (!limiter.take(ip)) throw new HttpError(429, 'too many requests');
       metrics.inc('http_api_requests_total');
+
+      const github = deps.github;
+      if (method === 'GET' && pathname === '/api/auth/providers') {
+        return json(res, 200, { github: !!github });
+      }
+      const cookiePrefix = github?.secure ? '__Host-' : '';
+      const verifierCookie = cookiePrefix + VERIFIER_COOKIE;
+      const sessionCookie = cookiePrefix + SESSION_COOKIE;
+      if (github && method === 'POST' && pathname === '/api/auth/github') {
+        if (req.headers.origin !== github.origin) throw new HttpError(403, 'invalid origin');
+        const { url: providerUrl, verifier } = await github.start();
+        res.setHeader('set-cookie', authCookie(verifierCookie, verifier, 600, github.secure));
+        return json(res, 200, { url: providerUrl });
+      }
+      if (github && method === 'GET' && pathname === GITHUB_CALLBACK) {
+        const cookies = [authCookie(verifierCookie, '', 0, github.secure)];
+        const code = url.searchParams.get('code');
+        const verifier = readCookie(req, verifierCookie);
+        let handoff = '';
+        try {
+          const identity = code && verifier ? await github.exchange(code, verifier) : null;
+          if (identity) {
+            const player = await github.getPlayer(identity.id, identity.nickname);
+            handoff = issueToken(player.id, player.nickname, secret + ':github-handoff', 60);
+          }
+        } catch (err) {
+          logger.error('GitHub callback failed', errorFields(err));
+        }
+        res.writeHead(303, {
+          location: github.origin + (handoff ? '/?github=ok' : '/?github=error'),
+          'set-cookie': [...cookies, authCookie(sessionCookie, handoff, handoff ? 60 : 0, github.secure)],
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        });
+        return res.end();
+      }
+      if (github && method === 'POST' && pathname === GITHUB_SESSION) {
+        if (req.headers.origin !== github.origin) throw new HttpError(403, 'invalid origin');
+        const handoff = readCookie(req, sessionCookie);
+        res.setHeader('set-cookie', authCookie(sessionCookie, '', 0, github.secure));
+        const payload = handoff ? verifyToken(handoff, secret + ':github-handoff') : null;
+        const player = payload && await repo.getPlayer(payload.sub);
+        if (!player) throw new HttpError(401, 'GitHub 로그인 세션이 만료되었습니다');
+        const token = issueToken(player.id, player.nickname, secret, deps.tokenTtlSec);
+        return json(res, 200, { token, player });
+      }
 
       if (method === 'POST' && pathname === '/api/auth/guest') {
         if (!guestLimiter.take(ip)) throw new HttpError(429, 'too many guest accounts');

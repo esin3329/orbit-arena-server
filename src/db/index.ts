@@ -1,8 +1,7 @@
 import type { Config } from '../config.ts';
-import type { Repository } from './types.ts';
 import { SqliteRepository } from './sqlite.ts';
 
-export async function createRepository(cfg: Pick<Config, 'dbDriver' | 'sqlitePath' | 'supabaseUrl' | 'supabaseKey'>): Promise<Repository> {
+export async function createRepository(cfg: Pick<Config, 'dbDriver' | 'sqlitePath' | 'supabaseUrl' | 'supabaseKey'>) {
   if (cfg.dbDriver === 'supabase') {
     if (!cfg.supabaseUrl || !cfg.supabaseKey) {
       throw new Error('DB_DRIVER=supabase 는 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다');
