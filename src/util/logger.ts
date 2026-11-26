@@ -2,9 +2,14 @@ type Level = 'debug' | 'info' | 'warn' | 'error';
 const ORDER: Record<string, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
 /** 구조화(JSON Lines) 로거 — 로그 수집기(Loki, CloudWatch 등)에 그대로 적재 가능 */
 function log(level: Level, msg: string, fields?: Record<string, unknown>) {
-  if (ORDER[level] < (ORDER[process.env.LOG_LEVEL ?? 'info'] ?? 20)) return;
+  const minLevel = typeof process !== 'undefined' && process.env ? (process.env.LOG_LEVEL ?? 'info') : 'info';
+  if (ORDER[level] < (ORDER[minLevel] ?? 20)) return;
   const line = JSON.stringify({ ts: new Date().toISOString(), level, msg, ...fields });
-  (level === 'error' || level === 'warn' ? process.stderr : process.stdout).write(line + '\n');
+  const stream = typeof process !== 'undefined' ? (level === 'error' || level === 'warn' ? process.stderr : process.stdout) : undefined;
+  if (stream && typeof stream.write === 'function') stream.write(line + '\n');
+  else if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
 }
 
 export const logger = {

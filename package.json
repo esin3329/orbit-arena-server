@@ -14,7 +14,8 @@
     "test": "node --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc",
     "check": "tsc && npm test",
-    "loadtest": "node scripts/loadtest.ts"
+    "loadtest": "node scripts/loadtest.ts",
+    "cf:deploy": "node scripts/cf-stage-assets.ts && npx wrangler deploy"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
