@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SqliteRepository } from '../src/db/sqlite.ts';
 import { createSupabaseRepository } from '../src/db/supabase.ts';
+import { computeRatingDeltas } from '../src/db/rating.ts';
 import type { MatchRecordInput, Repository } from '../src/db/types.ts';
 
 const SUPABASE_URL = process.env.SUPABASE_TEST_URL;
@@ -118,6 +119,43 @@ function contract(name: string, make: () => Promise<Repository>, skip: string | 
       assert.ok(board.every((p) => p.games > 0));
       assert.ok(!board.some((p) => p.id === idle.id), '게임 수 0 인 플레이어는 제외');
       for (let i = 1; i < board.length; i++) assert.ok(board[i - 1].rating >= board[i].rating, '레이팅 내림차순');
+    } finally {
+      await repo.close();
+    }
+  });
+
+  test(`[${name}] 동시 매치의 레이팅은 앞서 커밋된 매치 결과를 반영한다`, { skip }, async () => {
+    const repo = await make();
+    try {
+      const winner = await repo.createGuest(nick('win'));
+      const loser = await repo.createGuest(nick('lose'));
+      const match: MatchRecordInput = {
+        matchId: randomUUID(),
+        startedAt: new Date(),
+        endedAt: new Date(),
+        botCount: 0,
+        participants: [
+          { playerId: winner.id, nickname: winner.nickname, score: 10, kills: 1, deaths: 0, placement: 1 },
+          { playerId: loser.id, nickname: loser.nickname, score: 0, kills: 0, deaths: 1, placement: 2 },
+        ],
+      };
+      const [first, second] = await Promise.all([
+        repo.recordMatch(match),
+        repo.recordMatch({ ...match, matchId: randomUUID(), participants: [...match.participants].reverse() }),
+      ]);
+
+      const results = [first, second].map((rows) => rows.find((row) => row.playerId === winner.id)!);
+      results.sort((a, b) => a.ratingAfter - b.ratingAfter);
+      const expected = computeRatingDeltas([
+        { playerId: winner.id, rating: 1016, placement: 1 },
+        { playerId: loser.id, rating: 984, placement: 2 },
+      ]).get(winner.id)!;
+      assert.deepEqual(results.map(({ ratingDelta, ratingAfter }) => [ratingDelta, ratingAfter]), [
+        [16, 1016], [expected, 1016 + expected],
+      ]);
+      const player = await repo.getPlayer(winner.id);
+      assert.equal(player?.rating, 1016 + expected);
+      assert.equal(player?.games, 2);
     } finally {
       await repo.close();
     }
