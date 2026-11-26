@@ -274,7 +274,9 @@ test('룸 워커 크래시 복구: 워커 종료 시 error 종료 후 새 워커
     const pid = arena.pool!.workerPidOf(m1.roomId);
     assert.ok(pid);
     const errEnds = [waitFor(clients[0], 'match_end'), waitFor(clients[1], 'match_end')];
-    process.kill(pid);
+    // 워커는 정상 종료 조율을 위해 SIGTERM 을 무시하므로, 크래시는 무시할 수 없는 SIGKILL 로 흉내 낸다
+    // (Windows 는 신호 종류와 무관하게 강제 종료라 SIGTERM 으로도 통과해 버려 CI(Linux)에서만 실패했었다)
+    process.kill(pid, 'SIGKILL');
     const ended1 = await Promise.all(errEnds);
     assert.ok(ended1.every((e) => e.reason === 'error'));
 
