@@ -6,7 +6,7 @@
  */
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '../shared/sim.js';
-import { decodeSnapshot } from '../shared/codec.js';
+import { createSnapshotDecoder } from '../shared/codec.js';
 
 const N = Number(process.argv[2] ?? 64);
 const SECONDS = Number(process.argv[3] ?? 20);
@@ -30,6 +30,7 @@ async function bot(i: number) {
   if (!res.ok) throw new Error(`guest failed: ${res.status} ${await res.text()}`);
   const { token } = (await res.json()) as { token: string };
   const ws = new WebSocket(`${WS_BASE}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
+  const decodeSnapshot = createSnapshotDecoder();
   let seq = 0;
   let lastSnap = 0;
   let angle = Math.random() * Math.PI * 2;

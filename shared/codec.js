@@ -19,6 +19,7 @@
  */
 
 export const MSG_SNAPSHOT = 1;
+export const MSG_SNAPSHOT_DELTA = 2;
 export const SNAP_FLAG_ORBS = 1;
 
 /** ack 필드 위치 — 서버는 공통 본문을 한 번 인코딩한 뒤 플레이어별 ack 만 덮어쓴다 */
@@ -29,6 +30,91 @@ const PLAYER = 22;
 const BULLET = 8;
 const ORB = 5;
 const EVENT = 5;
+const BASE_TICK_BYTES = 4;
+
+/** @param {Uint8Array} frame */
+const frameView = (frame) => new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+
+/** @param {DataView} frame */
+const entityBytes = (frame) => frame.getUint8(14) * PLAYER + frame.getUint16(15, true) * BULLET;
+
+/**
+ * Encode changed player and projectile bytes against the previous full frame.
+ * The snapshot header, orbs and events belong to the current tick.
+ * @param {Uint8Array} full @param {Uint8Array} base
+ * @returns {Uint8Array | null}
+ */
+export function encodeSnapshotDelta(full, base) {
+  const current = frameView(full);
+  const previous = frameView(base);
+  if (current.getUint8(14) !== previous.getUint8(14) || current.getUint16(15, true) !== previous.getUint16(15, true)) {
+    return null;
+  }
+
+  const length = entityBytes(current);
+  const maskStart = HEADER + BASE_TICK_BYTES;
+  const maskEnd = maskStart + Math.ceil(length / 8);
+  const tail = full.subarray(HEADER + length);
+  const limit = full.length - tail.length;
+  if (maskEnd >= limit) return null;
+
+  const delta = new Uint8Array(full.length);
+  let write = maskEnd;
+  for (let i = 0; i < length; i++) {
+    const value = full[HEADER + i];
+    if (value === base[HEADER + i]) continue;
+    delta[maskStart + (i >> 3)] |= 1 << (i & 7);
+    delta[write++] = value;
+    if (write >= limit) return null;
+  }
+  delta.set(full.subarray(0, HEADER));
+  delta[0] = MSG_SNAPSHOT_DELTA;
+  frameView(delta).setUint32(HEADER, previous.getUint32(5, true), true);
+  delta.set(tail, write);
+  return delta.subarray(0, write + tail.length);
+}
+
+/** @param {Uint8Array} delta @param {Uint8Array | null} base */
+function expandSnapshotDelta(delta, base) {
+  const frame = frameView(delta);
+  if (!base || frame.byteLength < HEADER + BASE_TICK_BYTES) throw new Error('snapshot delta missing baseline');
+  const previous = frameView(base);
+  if (frame.getUint32(HEADER, true) !== previous.getUint32(5, true) ||
+      frame.getUint8(14) !== previous.getUint8(14) || frame.getUint16(15, true) !== previous.getUint16(15, true)) {
+    throw new Error('snapshot baseline mismatch');
+  }
+  const length = entityBytes(frame);
+  const maskStart = HEADER + BASE_TICK_BYTES;
+  let read = maskStart + Math.ceil(length / 8);
+  if (read > delta.length) throw new Error('truncated snapshot mask');
+  const entities = base.slice(HEADER, HEADER + length);
+  for (let i = 0; i < length; i++) {
+    if (!(delta[maskStart + (i >> 3)] & (1 << (i & 7)))) continue;
+    if (read >= delta.length) throw new Error('truncated snapshot delta');
+    entities[i] = delta[read++];
+  }
+  const full = new Uint8Array(HEADER + length + delta.length - read);
+  full.set(delta.subarray(0, HEADER));
+  full[0] = MSG_SNAPSHOT;
+  full.set(entities, HEADER);
+  full.set(delta.subarray(read), HEADER + length);
+  return full;
+}
+
+/** Create a decoder for one ordered WebSocket stream. */
+export function createSnapshotDecoder() {
+  /** @type {Uint8Array | null} */
+  let base = null;
+  return (/** @type {ArrayBuffer | ArrayBufferView} */ data) => {
+    const bytes = ArrayBuffer.isView(data)
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : new Uint8Array(data);
+    const frame = bytes[0] === MSG_SNAPSHOT_DELTA ? expandSnapshotDelta(bytes, base) : bytes;
+    const snapshot = decodeSnapshot(frame);
+    base = frame;
+    return snapshot;
+  };
+}
 
 const AIM_SCALE = 2000;
 const BULLET_POS_SCALE = 16;
