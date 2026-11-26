@@ -201,8 +201,11 @@ export class GameWorld {
    */
   private rewindFor(input: PlayerInput): number {
     if (input.rt === undefined) return 0;
+    const cap = input.maxRewind !== undefined
+      ? sim.clamp(input.maxRewind, 0, sim.LAG_COMP_MAX_TICKS)
+      : sim.LAG_COMP_MAX_TICKS;
     const r = this.tick - input.rt;
-    return r <= 0 ? 0 : Math.min(r, sim.LAG_COMP_MAX_TICKS);
+    return r <= 0 ? 0 : Math.min(r, cap);
   }
 
   /**

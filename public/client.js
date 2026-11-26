@@ -11,7 +11,6 @@
 import * as sim from '/shared/sim.js';
 import { createSnapshotDecoder } from '/shared/codec.js';
 
-const INTERP_DELAY_MS = 110;
 const MAX_SNAPS = 40;
 
 const $ = (/** @type {string} */ id) => /** @type {any} */ (document.getElementById(id));
@@ -311,6 +310,7 @@ function enterGame(/** @type {any} */ msg) {
     snaps: [],
     orbs: [],
     pending: [],
+    seq: 0,
     pred: null,
     serverMe: null,
     offset: null,
@@ -509,7 +509,7 @@ function sampleWorld() {
   if (!snaps.length) return null;
   const latest = snaps[snaps.length - 1];
   if (!opts.interp || G.offset === null) return { a: latest, b: latest, t: 0 };
-  const renderTick = (performance.now() - G.offset - INTERP_DELAY_MS) / sim.TICK_MS;
+  const renderTick = (performance.now() - G.offset - sim.INTERP_DELAY_MS) / sim.TICK_MS;
   for (let i = snaps.length - 1; i > 0; i--) {
     const a = snaps[i - 1];
     const b = snaps[i];

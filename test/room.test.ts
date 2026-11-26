@@ -251,3 +251,23 @@ test('스윕 충돌: 플레이어 가장자리를 스치는 탄도 놓치지 않
   for (let i = 0; i < 20; i++) room.step();
   assert.equal(victim.hp, sim.MAX_HP - sim.BULLET_DAMAGE);
 });
+
+test('초기 및 재접속 직후 스냅샷 ack 는 0 이며 언더플로우(4294967295)되지 않는다', () => {
+  const room = new Room({ durationTicks: 300, maxPlayers: 8, reconnectGraceTicks: 30, snapshotEvery: 1, repo: null, seed: 5 });
+  const a1 = new FakeConn('a');
+  room.addPlayer(a1);
+  room.addPlayer(new FakeConn('b'));
+
+  room.step();
+  assert.equal(a1.last('snap').ack, 0);
+
+  room.pushInput('a', mkInput(1));
+  room.step();
+  assert.equal(a1.last('snap').ack, 1);
+
+  room.detach('a', a1);
+  const a2 = new FakeConn('a');
+  assert.equal(room.rebind('a', a2), true);
+  room.step();
+  assert.equal(a2.last('snap').ack, 0);
+});

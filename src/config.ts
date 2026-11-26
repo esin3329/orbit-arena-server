@@ -33,11 +33,16 @@ export interface Config {
   apiRatePerSec: number;
   /** IP 당 게스트 계정 생성 허용량(분당) */
   guestRatePerMin: number;
+  /** 신뢰할 리버스 프록시 홉 수 (0 = X-Forwarded-For 무시) */
+  trustProxy: number;
+  /** /metrics 엔드포인트용 Bearer 토큰 (미설정 시 루프백에서만 접근 허용) */
+  metricsToken?: string;
   match: MatchConfig;
 }
 
 const env = process.env;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
+const parseTrustProxy = (v: string | undefined) => (v === 'true' ? 1 : v === 'false' ? 0 : num(v, 0));
 
 export const config: Config = {
   port: num(env.PORT, 3000),
@@ -54,6 +59,8 @@ export const config: Config = {
   roomWorkers: num(env.ROOM_WORKERS, 0),
   apiRatePerSec: num(env.API_RATE_PER_SEC, 10),
   guestRatePerMin: num(env.GUEST_RATE_PER_MIN, 5),
+  trustProxy: parseTrustProxy(env.TRUST_PROXY),
+  metricsToken: env.METRICS_TOKEN || undefined,
   match: {
     durationSec: num(env.MATCH_DURATION_SEC, 120),
     maxPlayers: num(env.MATCH_MAX_PLAYERS, 8),
@@ -84,6 +91,7 @@ export function validateConfig(cfg: Config, nodeEnv = process.env.NODE_ENV): str
   }
   if (!(cfg.apiRatePerSec > 0)) errors.push('API_RATE_PER_SEC must be > 0');
   if (!(cfg.guestRatePerMin > 0)) errors.push('GUEST_RATE_PER_MIN must be > 0');
+  int('TRUST_PROXY', cfg.trustProxy, 0, 10);
 
   const m = cfg.match;
   int('MATCH_DURATION_SEC', m.durationSec, 1, 3600);
@@ -111,6 +119,9 @@ export function validateConfig(cfg: Config, nodeEnv = process.env.NODE_ENV): str
   if (nodeEnv === 'production') {
     if (cfg.tokenSecret === DEV_TOKEN_SECRET) errors.push('TOKEN_SECRET must be set in production');
     else if (cfg.tokenSecret.length < 32) errors.push('TOKEN_SECRET must be at least 32 characters in production');
+    if (cfg.metricsToken !== undefined && cfg.metricsToken.length < 16) {
+      errors.push('METRICS_TOKEN must be at least 16 characters in production');
+    }
   }
   return errors;
 }

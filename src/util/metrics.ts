@@ -18,6 +18,16 @@ export class Metrics {
     return this.counters.get(name) ?? 0;
   }
 
+  /** 누적된 카운터 증분을 꺼내고 초기화한다 (워커 → 게이트웨이 집계용) */
+  drainCounters(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [k, v] of this.counters) {
+      if (v !== 0) out[k] = v;
+    }
+    this.counters.clear();
+    return out;
+  }
+
   gauge(name: string, fn: () => number) {
     this.gauges.set(name, fn);
   }

@@ -166,21 +166,90 @@ test('오브 델타: 첫 스냅샷·오브 변화·재접속·혼잡으로 건�
   assert.equal(a2.snaps[0].kind, MSG_SNAPSHOT);
 });
 
-test('플레이어·탄환 델타는 현재 ack·좌표·이벤트·오브를 복원하고 잘못된 기준 틱을 거부한다', () => {
-  const state = sample();
-  const base = encodeSnapshot(state, 20, false);
-  state.tick++;
-  state.p[0][1] += 4;
-  state.b[1][2] += 16;
-  const full = encodeSnapshot(state, 21, true);
+test('v5 델타: 일부 플레이어·탄환의 생성/이동/소멸이 섞여도 정확히 복원되고 크기가 줄어든다', () => {
+  const baseState = sample();
+  const base = encodeSnapshot(baseState, 20, false);
+
+  // 플레이어 1 은 이동+조준, 플레이어 7 은 완전 정지(0B), 탄환 70001 제거, 70002 이동, 70003 추가
+  const nextState = {
+    tick: baseState.tick + 1,
+    rem: baseState.rem - 1,
+    p: [
+      [1, 820.5, 102.25, 100, 1, 42, -2.5, 2, 16, 4, 2],
+      [...baseState.p[1]],
+    ],
+    b: [
+      [70002, 12.25, 514.5],
+      [70003, 500, 400],
+    ],
+    o: baseState.o,
+    ev: [{ k: 'hit' as const, v: 7 }],
+  };
+  const full = encodeSnapshot(nextState, 21, true);
   const delta = encodeSnapshotDelta(full, base)!;
-  assert.ok(delta.length < full.length);
+  assert.ok(delta);
+  assert.equal(delta[0], MSG_SNAPSHOT_DELTA);
+  assert.ok(delta.length < full.length, `delta ${delta.length}B < full ${full.length}B`);
+
   const read = createSnapshotDecoder();
   assert.throws(() => read(delta), /baseline/);
   read(base);
-  assert.throws(() => read(delta.subarray(0, delta.length - 1)));
   assert.deepEqual(read(delta), decodeSnapshot(full));
   assert.throws(() => read(delta), /baseline mismatch/);
-  state.b.pop();
-  assert.equal(encodeSnapshotDelta(encodeSnapshot(state, 22, false), base), null);
+});
+
+test('v5 델타: 플레이어 이탈·참가 및 무변화 프레임을 정확히 복원하고 손상된 델타를 거부한다', () => {
+  const s0 = sample();
+  const base = encodeSnapshot(s0, 10, true);
+
+  // 무변화(tick/rem 만 변경): 최소 크기 델타
+  const sIdle = { ...s0, tick: s0.tick + 1, rem: s0.rem - 1, ev: [] };
+  const fullIdle = encodeSnapshot(sIdle, 11, false);
+  const deltaIdle = encodeSnapshotDelta(fullIdle, base)!;
+  assert.ok(deltaIdle.length < 40, `idle delta=${deltaIdle.length}B`);
+
+  const read = createSnapshotDecoder();
+  read(base);
+  assert.deepEqual(read(deltaIdle), decodeSnapshot(fullIdle));
+
+  // 플레이어 7 이탈 + 플레이어 9 신규 참가 + 탄환 전부 소멸
+  const sJoinLeave = {
+    tick: sIdle.tick + 1,
+    rem: sIdle.rem - 1,
+    p: [
+      [...sIdle.p[0]],
+      [9, 400, 500, 100, 1, 0, 1.25, 0, 0, 0, 0],
+    ],
+    b: [],
+    ev: [],
+  };
+  const fullJL = encodeSnapshot(sJoinLeave, 12, false);
+  const deltaJL = encodeSnapshotDelta(fullJL, fullIdle)!;
+  assert.ok(deltaJL);
+  assert.ok(deltaJL.length < fullJL.length);
+  for (let cut = 0; cut < deltaJL.length; cut++) {
+    const check = createSnapshotDecoder();
+    check(fullIdle);
+    assert.throws(() => check(deltaJL.subarray(0, cut)), `truncated at ${cut}`);
+  }
+  assert.deepEqual(read(deltaJL), decodeSnapshot(fullJL));
+});
+
+test('v5 델타: 8인 교전(탄환 수시 변동)에서도 델타 프레임이 적용되고 평균 전송량이 줄어든다', () => {
+  const room = new Room({ durationTicks: 3000, maxPlayers: 8, reconnectGraceTicks: 30, snapshotEvery: 2, repo: null, seed: 11 });
+  const a = new FakeConn('a');
+  room.addPlayer(a);
+  for (let i = 0; i < 7; i++) room.addBot(`bot${i}`);
+
+  for (let i = 1; i <= 180; i++) {
+    room.pushInput('a', { seq: i, dx: Math.cos(i / 15), dy: Math.sin(i / 19), aim: i / 10, fire: i % 6 === 0, dash: false });
+    room.step();
+  }
+
+  const deltaSnaps = a.snaps.filter((s) => s.kind === MSG_SNAPSHOT_DELTA);
+  assert.ok(deltaSnaps.length > a.snaps.length * 0.6, `expected majority deltas (${deltaSnaps.length}/${a.snaps.length})`);
+
+  const totalSent = a.snaps.reduce((sum, s) => sum + s.bytes, 0);
+  const totalIfFull = a.snaps.reduce((sum, s) => sum + encodeSnapshot(s.d, 0, !!s.d.o).byteLength, 0);
+  assert.ok(totalSent < totalIfFull, `delta total ${totalSent}B < full total ${totalIfFull}B`);
 });

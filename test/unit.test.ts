@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { IncomingMessage } from 'node:http';
 import { signToken, verifyToken } from '../src/auth/token.ts';
 import { TokenBucket } from '../src/util/rateLimiter.ts';
 import { computeRatingDeltas } from '../src/db/rating.ts';
@@ -7,6 +8,7 @@ import { parseClientMessage } from '../src/net/protocol.ts';
 import { InputBuffer, INPUT_CREDIT_PER_TICK, MAX_INPUT_QUEUE } from '../src/game/inputBuffer.ts';
 import { rank } from '../src/game/ranking.ts';
 import { config, validateConfig, DEV_TOKEN_SECRET } from '../src/config.ts';
+import { clientIp } from '../src/http/api.ts';
 import { retry } from '../src/util/retry.ts';
 import { OBSTACLES, segmentCircleHit, segmentObstacleHit } from '../shared/sim.js';
 
@@ -60,6 +62,7 @@ test('프로토콜: 잘못된 메시지 거부, 범위 밖 값은 clamp', () => 
   assert.equal(parseClientMessage('not json'), null);
   assert.equal(parseClientMessage('[]'), null);
   assert.equal(parseClientMessage('{"t":"hack"}'), null);
+  assert.equal(parseClientMessage('{"t":"input","seq":0,"dx":0,"dy":0,"aim":0}'), null);
   assert.equal(parseClientMessage('{"t":"input","seq":-1,"dx":0,"dy":0,"aim":0}'), null);
   assert.equal(parseClientMessage('{"t":"input","seq":1.5,"dx":0,"dy":0,"aim":0}'), null);
   assert.equal(parseClientMessage('{"t":"input","seq":1,"dx":"1","dy":0,"aim":0}'), null);
@@ -69,6 +72,8 @@ test('프로토콜: 잘못된 메시지 거부, 범위 밖 값은 clamp', () => 
 
 test('InputBuffer: 틱당 예산만큼만 꺼내고, 몰아 보내도 장기 처리율은 1.05/틱으로 제한', () => {
   const buf = new InputBuffer();
+  assert.equal(buf.lastProcessedSeq, 0);
+  assert.equal(buf.push(mkIn(0)), false, 'seq 0 이하 거부');
   for (let i = 1; i <= MAX_INPUT_QUEUE; i++) assert.ok(buf.push(mkIn(i)));
   assert.equal(buf.push(mkIn(3)), false, '역순 seq 거부');
   assert.equal(buf.drain().length, 2, '초기 예산 1 + 회복 1.05 → 2개');
@@ -80,7 +85,7 @@ test('InputBuffer: 틱당 예산만큼만 꺼내고, 몰아 보내도 장기 처
   assert.ok(processed <= 2 + Math.ceil(100 * INPUT_CREDIT_PER_TICK), `처리량 제한 (processed=${processed})`);
   assert.equal(buf.lastProcessedSeq > 0, true);
   buf.reset();
-  assert.equal(buf.lastProcessedSeq, -1);
+  assert.equal(buf.lastProcessedSeq, 0);
   assert.ok(buf.push(mkIn(1)), '재접속 후 seq 1 부터 다시 허용');
 });
 
@@ -102,14 +107,49 @@ test('순위: 점수→킬→데스 순 정렬, 완전 동점은 같은 순위(1
   );
 });
 
-test('설정 검증: 범위 오류와 운영 환경 기본 시크릿을 거부', () => {
+test('설정 검증: 범위 오류와 운영 환경 기본 시크릿·프록시·워커·OAuth 설정을 검증', () => {
   assert.deepEqual(validateConfig(config, 'development'), []);
   const bad = { ...config, port: 70000, match: { ...config.match, maxPlayers: 1 } };
   assert.equal(validateConfig(bad, 'development').length, 3, 'PORT, MAX_PLAYERS, BOT_FILL_TO(>max)');
   assert.ok(validateConfig({ ...config, tokenSecret: DEV_TOKEN_SECRET }, 'production').some((e) => e.includes('TOKEN_SECRET')));
   assert.ok(validateConfig({ ...config, tokenSecret: 'short' }, 'production').some((e) => e.includes('32')));
   assert.deepEqual(validateConfig({ ...config, tokenSecret: 'x'.repeat(32) }, 'production'), []);
+
   assert.ok(validateConfig({ ...config, dbDriver: 'supabase' }, 'development').some((e) => e.includes('SUPABASE')));
+  assert.ok(validateConfig({ ...config, roomWorkers: 2, sqlitePath: ':memory:' }, 'development').some((e) => e.includes('ROOM_WORKERS')));
+  assert.ok(validateConfig({ ...config, trustProxy: -1 }, 'development').some((e) => e.includes('TRUST_PROXY')));
+  assert.ok(validateConfig({ ...config, trustProxy: 11 }, 'development').some((e) => e.includes('TRUST_PROXY')));
+  assert.deepEqual(validateConfig({ ...config, trustProxy: 2 }, 'development'), []);
+  assert.ok(
+    validateConfig({ ...config, tokenSecret: 'x'.repeat(32), metricsToken: 'short' }, 'production').some((e) => e.includes('METRICS_TOKEN')),
+  );
+  assert.deepEqual(validateConfig({ ...config, tokenSecret: 'x'.repeat(32), metricsToken: 'm'.repeat(16) }, 'production'), []);
+
+  const sbBase = {
+    ...config,
+    tokenSecret: 'x'.repeat(32),
+    dbDriver: 'supabase' as const,
+    supabaseUrl: 'https://proj.supabase.co',
+    supabaseKey: 'service-key',
+    supabasePublishableKey: 'pub-key',
+  };
+  assert.deepEqual(validateConfig({ ...sbBase, githubAuthOrigin: 'https://arena.example.com' }, 'production'), []);
+  assert.deepEqual(validateConfig({ ...sbBase, githubAuthOrigin: 'http://localhost:3000' }, 'development'), []);
+  assert.ok(validateConfig({ ...sbBase, githubAuthOrigin: 'http://localhost:3000' }, 'production').some((e) => e.includes('GITHUB_AUTH_ORIGIN')));
+  assert.ok(validateConfig({ ...sbBase, githubAuthOrigin: 'https://arena.example.com/' }, 'production').some((e) => e.includes('GITHUB_AUTH_ORIGIN')));
+  assert.ok(validateConfig({ ...config, githubAuthOrigin: 'https://arena.example.com' }, 'development').some((e) => e.includes('GitHub auth')));
+});
+
+test('clientIp: TRUST_PROXY 홉 수에 따라 X-Forwarded-For 에서 신뢰된 클라이언트 IP 를 추출', () => {
+  const req = (remoteAddress: string | undefined, xff?: string | string[]) =>
+    ({ headers: xff !== undefined ? { 'x-forwarded-for': xff } : {}, socket: { remoteAddress } }) as unknown as IncomingMessage;
+
+  assert.equal(clientIp(req('10.0.0.1', '1.2.3.4'), 0), '10.0.0.1');
+  assert.equal(clientIp(req('10.0.0.1', '9.9.9.9, 1.2.3.4'), 1), '1.2.3.4');
+  assert.equal(clientIp(req('10.0.0.1', '9.9.9.9, 5.6.7.8, 1.2.3.4'), 2), '5.6.7.8');
+  assert.equal(clientIp(req('10.0.0.1', '5.6.7.8'), 2), '5.6.7.8');
+  assert.equal(clientIp(req('10.0.0.1'), 1), '10.0.0.1');
+  assert.equal(clientIp(req(undefined), 1), 'unknown');
 });
 
 test('기하: 선분-원 / 선분-사각형 교차 (스윕 충돌, 시야 판정)', () => {

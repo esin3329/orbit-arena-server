@@ -54,7 +54,7 @@ async function newPlayer(nickname: string, rating = 1000) {
   return id;
 }
 
-type Result = { player_id: string; nickname: string; score: number; kills: number; deaths: number; placement: number; rating_delta: number };
+type Result = { player_id: string; nickname: string; score: number; kills: number; deaths: number; placement: number };
 
 const recordMatch = (matchId: string, results: Result[], botCount = 2) =>
   db.query<{ out_player_id: string; out_rating: number; out_rating_delta: number }>(
@@ -72,8 +72,8 @@ test('Supabase 스키마: record_match 가 매치·참가자·누적 스탯·레
 
   const res = await as('service_role', () =>
     recordMatch(matchId, [
-      { player_id: a, nickname: 'alpha', score: 42, kills: 4, deaths: 1, placement: 1, rating_delta: 12 },
-      { player_id: b, nickname: 'bravo', score: 7, kills: 1, deaths: 4, placement: 3, rating_delta: -12 },
+      { player_id: a, nickname: 'alpha', score: 42, kills: 4, deaths: 1, placement: 1 },
+      { player_id: b, nickname: 'bravo', score: 7, kills: 1, deaths: 4, placement: 3 },
     ]),
   );
 
@@ -93,18 +93,27 @@ test('Supabase 스키마: 같은 matchId 재호출(응답 유실 후 재시도)�
   const b = await newPlayer('delta');
   const matchId = randomUUID();
   const results: Result[] = [
-    { player_id: a, nickname: 'charlie', score: 30, kills: 3, deaths: 0, placement: 1, rating_delta: 16 },
-    { player_id: b, nickname: 'delta', score: 10, kills: 0, deaths: 3, placement: 2, rating_delta: -16 },
+    { player_id: a, nickname: 'charlie', score: 30, kills: 3, deaths: 0, placement: 1 },
+    { player_id: b, nickname: 'delta', score: 10, kills: 0, deaths: 3, placement: 2 },
   ];
 
   const first = await as('service_role', () => recordMatch(matchId, results));
-  // 재시도 시 서버는 (이미 바뀐 레이팅으로) 다른 델타를 계산해 보낼 수 있다 → 무시되고 저장된 값이 돌아와야 한다
-  const retried = await as('service_role', () => recordMatch(matchId, results.map((r) => ({ ...r, rating_delta: r.rating_delta / 2 }))));
+  // 이후 다른 매치가 반영되어 레이팅이 변한 뒤에도 matchId 재호출은 원래 저장된 델타를 돌려준다
+  await as('service_role', () =>
+    recordMatch(randomUUID(), [
+      { player_id: a, nickname: 'charlie', score: 1, kills: 0, deaths: 2, placement: 2 },
+      { player_id: b, nickname: 'delta', score: 20, kills: 2, deaths: 0, placement: 1 },
+    ]),
+  );
+  const afterSecond = await player(a);
+  const retried = await as('service_role', () => recordMatch(matchId, results));
 
-  const sort = (rows: any[]) => rows.map((r) => ({ ...r })).sort((x, y) => (x.out_player_id < y.out_player_id ? -1 : 1));
-  assert.deepEqual(sort(retried.rows), sort(first.rows));
-  assert.equal((await player(a)).games, 1, '스탯이 두 번 반영되지 않음');
-  assert.equal((await player(a)).rating, 1016);
+  const outFirst = new Map(first.rows.map((r) => [r.out_player_id, r]));
+  const outRetried = new Map(retried.rows.map((r) => [r.out_player_id, r]));
+  assert.equal(outRetried.get(a)!.out_rating_delta, outFirst.get(a)!.out_rating_delta);
+  assert.equal(outRetried.get(b)!.out_rating_delta, outFirst.get(b)!.out_rating_delta);
+  assert.equal(outRetried.get(a)!.out_rating, afterSecond.rating);
+  assert.equal((await player(a)).games, 2, '스탯이 이중 반영되지 않음');
   assert.equal(Number((await db.query<any>('select count(*) as n from match_players where match_id = $1', [matchId])).rows[0].n), 2);
 });
 
@@ -116,8 +125,8 @@ test('Supabase 스키마: 참가자 하나라도 실패하면 매치 전체가 �
   await assert.rejects(
     as('service_role', () =>
       recordMatch(matchId, [
-        { player_id: a, nickname: 'echo', score: 5, kills: 0, deaths: 0, placement: 1, rating_delta: 10 },
-        { player_id: ghost, nickname: 'ghost', score: 0, kills: 0, deaths: 0, placement: 2, rating_delta: -10 },
+        { player_id: a, nickname: 'echo', score: 5, kills: 0, deaths: 0, placement: 1 },
+        { player_id: ghost, nickname: 'ghost', score: 0, kills: 0, deaths: 0, placement: 2 },
       ]),
     ),
   );
@@ -145,7 +154,7 @@ test('Supabase 스키마: RLS — anon/authenticated 는 읽기만, 쓰기와 re
     assert.equal(del.affectedRows, 0);
 
     await assert.rejects(
-      as(role, () => recordMatch(randomUUID(), [{ player_id: a, nickname: 'foxtrot', score: 999, kills: 99, deaths: 0, placement: 1, rating_delta: 500 }])),
+      as(role, () => recordMatch(randomUUID(), [{ player_id: a, nickname: 'foxtrot', score: 999, kills: 99, deaths: 0, placement: 1 }])),
       /permission denied/,
       `${role} 는 record_match 를 호출할 수 없다`,
     );
@@ -172,8 +181,8 @@ test('Supabase 스키마: player_matches 는 종료 시각 최신순으로 정�
         `2026-11-20T${hour}:00:00Z`,
         `2026-11-20T${hour}:05:00Z`,
         JSON.stringify([
-          { player_id: a, nickname: 'golf', score: ord, kills: 0, deaths: 0, placement: 1, rating_delta: 1 },
-          { player_id: b, nickname: 'hotel', score: 0, kills: 0, deaths: 0, placement: 2, rating_delta: -1 },
+          { player_id: a, nickname: 'golf', score: ord, kills: 0, deaths: 0, placement: 1 },
+          { player_id: b, nickname: 'hotel', score: 0, kills: 0, deaths: 0, placement: 2 },
         ]),
       ]),
     );
@@ -189,6 +198,44 @@ test('Supabase 스키마: player_matches 는 종료 시각 최신순으로 정�
     as('anon', () => db.query('select * from player_matches($1, 10)', [a])),
     /permission denied/,
   );
+});
+
+test('Supabase 스키마: github_accounts 는 service_role 전용이며 get_or_create_github_player 는 멱등하다', async () => {
+  const authUserId = randomUUID();
+
+  const first = await as('service_role', () =>
+    db.query<{ id: string }>('select get_or_create_github_player($1, $2) as id', [authUserId, 'octocat']),
+  );
+  const playerId = first.rows[0].id;
+  assert.ok(playerId);
+  assert.equal((await db.query<{ nickname: string }>('select nickname from players where id = $1', [playerId])).rows[0].nickname, 'octocat');
+
+  const second = await as('service_role', () =>
+    db.query<{ id: string }>('select get_or_create_github_player($1, $2) as id', [authUserId, 'octocat-renamed']),
+  );
+  assert.equal(second.rows[0].id, playerId, '동일 auth_user_id 재호출 시 기존 player_id 반환');
+  assert.equal(
+    Number((await db.query<{ n: string }>('select count(*) as n from github_accounts where auth_user_id = $1', [authUserId])).rows[0].n),
+    1,
+  );
+
+  for (const role of ['anon', 'authenticated'] as const) {
+    await assert.rejects(
+      as(role, () => db.query('select * from github_accounts')),
+      /permission denied/,
+      `${role} 는 github_accounts 를 읽을 수 없다`,
+    );
+    await assert.rejects(
+      as(role, () => db.query('insert into github_accounts (auth_user_id, player_id) values ($1, $2)', [randomUUID(), playerId])),
+      /permission denied/,
+      `${role} 는 github_accounts 에 쓸 수 없다`,
+    );
+    await assert.rejects(
+      as(role, () => db.query('select get_or_create_github_player($1, $2)', [randomUUID(), 'hacker'])),
+      /permission denied/,
+      `${role} 는 get_or_create_github_player 를 호출할 수 없다`,
+    );
+  }
 });
 
 test('Supabase 스키마: 닉네임 길이 제약과 리더보드 부분 인덱스', async () => {

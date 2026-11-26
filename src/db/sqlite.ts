@@ -76,13 +76,13 @@ export class SqliteRepository implements Repository {
   }
 
   private migrate() {
-    const { user_version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-    for (let v = user_version; v < MIGRATIONS.length; v++) {
-      this.tx(() => {
+    this.tx(() => {
+      const { user_version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+      for (let v = user_version; v < MIGRATIONS.length; v++) {
         this.db.exec(MIGRATIONS[v]);
         this.db.exec(`PRAGMA user_version = ${v + 1}`);
-      });
-    }
+      }
+    });
   }
 
   private tx<T>(fn: () => T): T {

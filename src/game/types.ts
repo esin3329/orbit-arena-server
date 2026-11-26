@@ -20,4 +20,6 @@ export interface PlayerInput {
   dash: boolean;
   /** 입력 당시 클라이언트가 화면에 그리던 서버 틱 (지연 보상용, 선택) */
   rt?: number;
+  /** 서버가 측정한 RTT 기반으로 제한한 최대 되감기 틱 (서버 내부 전용) */
+  maxRewind?: number;
 }

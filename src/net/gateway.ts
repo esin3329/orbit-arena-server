@@ -2,9 +2,10 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import { verifyToken, type TokenPayload } from '../auth/token.ts';
+import type { Repository } from '../db/types.ts';
 import type { Matchmaker } from '../game/matchmaker.ts';
 import type { PlayerConnection } from '../game/types.ts';
-import { PROTOCOL_VERSION, TICK_RATE } from '../../shared/sim.js';
+import { maxRewindTicksForRtt, PROTOCOL_VERSION, TICK_RATE } from '../../shared/sim.js';
 import { errorFields, logger } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
 import { TokenBucket } from '../util/rateLimiter.ts';
@@ -24,6 +25,8 @@ export class WsConnection implements PlayerConnection {
   readonly bucket = new TokenBucket(90, 45);
   alive = true;
   violations = 0;
+  pingSentAt: number | null = null;
+  rttMs: number | null = null;
 
   constructor(ws: WebSocket, payload: TokenPayload) {
     this.ws = ws;
@@ -51,13 +54,19 @@ function reject(socket: Duplex, status: number, text: string) {
  * - 같은 계정의 중복 접속은 이전 연결을 4001 코드로 종료 (세션 하이재킹/멀티 클라이언트 방지)
  * - ping/pong 하트비트로 죽은 연결(half-open TCP) 정리
  */
-export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; secret: string }) {
-  const { matchmaker, secret } = deps;
+export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; repo: Repository; secret: string }) {
+  const { matchmaker, repo, secret } = deps;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024, perMessageDeflate: false });
   const sessions = new Map<string, WsConnection>();
+  let closed = false;
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost');
+    } catch {
+      return reject(socket, 400, 'Bad Request');
+    }
     if (url.pathname !== '/ws') return reject(socket, 404, 'Not Found');
     // 배포 직후 캐시된 구버전 클라이언트가 바뀐 메시지 형식으로 오동작하지 않도록 핸드셰이크에서 차단
     if (url.searchParams.get('v') !== String(PROTOCOL_VERSION)) {
@@ -69,7 +78,24 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
       metrics.inc('ws_auth_failures_total');
       return reject(socket, 401, 'Unauthorized');
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, payload));
+    void (async () => {
+      try {
+        const player = await repo.getPlayer(payload.sub);
+        if (closed || socket.destroyed) {
+          if (!socket.destroyed) reject(socket, 503, 'Service Unavailable');
+          return;
+        }
+        if (!player) {
+          metrics.inc('ws_auth_failures_total');
+          return reject(socket, 401, 'Unauthorized');
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, { ...payload, nick: player.nickname }));
+      } catch (err) {
+        metrics.inc('db_errors_total');
+        logger.error('ws upgrade db lookup failed', errorFields(err));
+        if (!socket.destroyed) reject(socket, 503, 'Service Unavailable');
+      }
+    })();
   });
 
   function onConnection(ws: WebSocket, payload: TokenPayload) {
@@ -80,12 +106,21 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
     sessions.set(conn.playerId, conn);
     metrics.inc('ws_connections_total');
     conn.send(JSON.stringify({ t: 'welcome', playerId: conn.playerId, nickname: conn.nickname, tickRate: TICK_RATE, pv: PROTOCOL_VERSION }));
+    if (ws.readyState === WebSocket.OPEN) {
+      conn.pingSentAt = performance.now();
+      ws.ping();
+    }
 
     // 진행 중인 매치가 있으면 자동 재접속
     matchmaker.roomOf(conn.playerId)?.rebind(conn.playerId, conn);
 
     ws.on('pong', () => {
       conn.alive = true;
+      if (conn.pingSentAt !== null) {
+        const sample = Math.max(0, performance.now() - conn.pingSentAt);
+        conn.rttMs = conn.rttMs === null ? sample : conn.rttMs * 0.7 + sample * 0.3;
+        conn.pingSentAt = null;
+      }
     });
 
     ws.on('message', (data, isBinary) => {
@@ -120,9 +155,11 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
 
   function dispatch(conn: WsConnection, msg: ClientMessage) {
     switch (msg.t) {
-      case 'input':
-        matchmaker.roomOf(conn.playerId)?.pushInput(conn.playerId, msg);
+      case 'input': {
+        const input = conn.rttMs === null ? msg : { ...msg, maxRewind: maxRewindTicksForRtt(conn.rttMs) };
+        matchmaker.roomOf(conn.playerId)?.pushInput(conn.playerId, input);
         break;
+      }
       case 'ping':
         conn.send(`{"t":"pong","ts":${msg.ts},"st":${Date.now()}}`);
         break;
@@ -143,6 +180,7 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
         continue;
       }
       conn.alive = false;
+      conn.pingSentAt = performance.now();
       conn.ws.ping();
     }
   }, HEARTBEAT_MS);
@@ -150,6 +188,7 @@ export function attachGateway(server: Server, deps: { matchmaker: Matchmaker; se
   return {
     sessions,
     close() {
+      closed = true;
       clearInterval(heartbeat);
       for (const c of sessions.values()) c.ws.close(1001, 'server shutting down');
       wss.close();

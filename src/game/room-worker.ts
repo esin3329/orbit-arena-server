@@ -1,5 +1,6 @@
 import { createRepository } from '../db/index.ts';
 import { errorFields, logger } from '../util/logger.ts';
+import { metrics } from '../util/metrics.ts';
 import type { RoomCommand, RoomEvent } from './room-ipc.ts';
 import { Room } from './room.ts';
 import type { PlayerConnection } from './types.ts';
@@ -31,10 +32,21 @@ const rooms = new Map<string, { room: Room; players: Map<string, WorkerConnectio
 let ipcBacklog = 0;
 let repoReady: ReturnType<typeof createRepository> | undefined;
 let tickSamples: number[] = [];
-setInterval(() => {
-  if (tickSamples.length && !ipcBacklog) send({ type: 'ticks', samples: tickSamples });
+
+function flushMetrics(force = false) {
+  if (!force && ipcBacklog > 0) {
+    if (tickSamples.length > 1024) tickSamples = tickSamples.slice(-1024);
+    return;
+  }
+  const samples = tickSamples;
   tickSamples = [];
-}, 250).unref();
+  const counters = metrics.drainCounters();
+  if (samples.length || Object.keys(counters).length) {
+    send({ type: 'metrics', samples, counters });
+  }
+}
+
+setInterval(() => flushMetrics(), 250).unref();
 
 function send(event: RoomEvent) {
   if (!process.connected || !process.send) return;
@@ -57,6 +69,7 @@ async function receive(command: RoomCommand) {
   if (command.type === 'close') {
     await Promise.all([...rooms.values()].map(({ room }) => room.end('shutdown')));
     await repo.close();
+    flushMetrics(true);
     process.disconnect?.();
     return;
   }
@@ -71,6 +84,7 @@ async function receive(command: RoomCommand) {
         onTick: (ms) => tickSamples.push(ms),
         onEnd: () => {
           rooms.delete(roomId);
+          flushMetrics(true);
           send({ type: 'ended', roomId });
         },
         onPlayerExpired: (playerId) => {
@@ -139,5 +153,6 @@ process.on('message', (command: RoomCommand) => {
   });
 });
 process.on('disconnect', () => process.exit(0));
-// The gateway handles console shutdown and lets each worker persist its rooms first.
+// The gateway handles console/service shutdown and lets each worker persist its rooms first.
 process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {});

@@ -17,7 +17,7 @@ export type RoomCommand =
 
 export type RoomEvent =
   | { type: 'ready' }
-  | { type: 'ticks'; samples: number[] }
+  | { type: 'metrics'; samples: number[]; counters: Record<string, number> }
   | { type: 'ending' | 'ended'; roomId: string }
   | { type: 'expired'; roomId: string; playerId: string; binding: number }
   | { type: 'frame'; roomId: string; playerId: string; binding: number; data: string | Uint8Array };

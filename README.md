@@ -22,18 +22,18 @@ WASD 이동 · 마우스 조준 · 클릭 사격 · Space 대시 · Esc 나가�
 | **넷코드** | 클라이언트 예측(prediction) → 서버 ack 기반 보정(reconciliation) → 오차를 지수 감쇠로 부드럽게 흡수. 다른 플레이어는 서버 틱 시계 기준 110ms 과거를 **보간(interpolation)** |
 | **결정적 공유 시뮬레이션** | `shared/sim.js`를 서버(TS import)와 브라우저(ES module)가 그대로 사용. 테스트로 *서버 결과 == 클라이언트 예측* **완전 일치**를 검증 |
 | **계층 분리 · 리플레이** | `GameWorld`(순수 규칙, I/O 없음) ↔ `Room`(세션·루프·네트워크·영속화) 분리. 룸마다 **시드 RNG**를 써서 *같은 시드 + 같은 입력 로그 → 같은 상태 해시*를 테스트로 보장. 크래시 로그에 시드·틱이 남아 재현 가능 |
-| **지연 보상** | 입력에 "화면에 보이던 서버 틱(rt)"을 실어 보내고, 서버는 위치 히스토리 링버퍼로 **그 시점까지 되감아** 탄 판정(최대 250ms, 조작 방지 클램프). 아래 *지연 보상* 절 참고 |
+| **지연 보상** | 입력에 "화면에 보이던 서버 틱(rt)"을 실어 보내고, 서버는 위치 히스토리 링버퍼로 **그 시점까지 되감아** 탄 판정(최대 250ms, 서버 측정 RTT 기반 동적 상한·조작 방지 클램프). 아래 *지연 보상* 절 참고 |
 | **연속 충돌 검사** | 탄환은 틱당 ~27px 이동하므로 끝점 검사로는 가장자리를 스치는 탄이 빠져나감(터널링). 이동 **선분 vs 원/사각형(Liang–Barsky)** 교차로 첫 충돌 대상을 판정. 같은 함수로 봇 시야(LoS) 판정 |
 | **치트 방지** | 입력 값 검증·clamp, seq 역순/중복 거부(리플레이 방지), **틱당 입력 예산(1.05/tick)** 으로 입력을 몰아 보내는 스피드핵 차단, 사격 쿨다운은 서버에서만 판정 |
 | **매치메이킹** | 대기열 → 풀방 즉시 시작 / 대기 시간 초과 시 **봇 채움** / 진행 중 매치 **난입(late join)** 시 봇 자리를 사람에게 양보 |
-| **세션 관리** | HTTP Upgrade 단계에서 토큰·**프로토콜 버전** 검증(미인증 401, 구버전 클라이언트 426 → 새로고침 안내), 중복 접속 시 이전 연결 4001 종료, ping/pong 하트비트로 half-open 연결 정리 |
+| **세션 관리** | HTTP Upgrade 단계에서 토큰 서명·DB 플레이어 실존·**프로토콜 버전** 검증(미인증/삭제 계정 401, 구버전 클라이언트 426 → 새로고침 안내), 중복 접속 시 이전 연결 4001 종료, ping/pong 하트비트로 RTT 측정 및 half-open 연결 정리 |
 | **재접속** | 연결이 끊겨도 10초간 자리 유지 → 새로고침해도 **같은 매치로 복귀**(점수·위치 유지), 클라이언트는 지수 백오프로 재연결 |
 | **백프레셔** | 소켓 송신 버퍼가 128KB를 넘으면 해당 클라이언트 스냅샷을 건너뜀(느린 소비자가 서버 메모리를 잡아먹지 않도록) |
-| **바이너리 스냅샷** | 서버·브라우저가 공유하는 `shared/codec.js`로 플레이어·탄환의 변경 바이트와 오브 목록 변경을 전송. 새 연결과 혼잡으로 전송을 건너뛴 연결에는 전체 플레이어·탄환 상태를 전송. 공통 프레임을 재사용하고 플레이어별로 입력 `ack` 4바이트만 덮어씀 |
+| **바이너리 스냅샷** | 서버·브라우저가 공유하는 `shared/codec.js` v5 코덱으로 플레이어 eid별 변경 필드와 탄환 제거 비트맵·생존 탄환 좌표(4B)·신규 탄환(8B)만 전송. 엔티티 생성·소멸이 잦은 교전 중에도 델타가 유지되며, 혼잡·신규 연결에는 전체 프레임을 전송. 공통 프레임을 재사용하고 플레이어별로 입력 `ack` 4바이트만 덮어씀 |
 | **영속화** | Repository 인터페이스로 **SQLite ↔ Supabase** 교체. 매치 결과 + 누적 스탯 + 레이팅 갱신을 **하나의 트랜잭션**으로 처리. 일시 장애는 **지수 백오프 재시도**. 저장은 matchId 기준 **멱등**(커밋 후 응답이 유실돼도 재시도가 이중 반영 없이 저장된 결과를 돌려받음). 그래도 실패하면 게임은 계속 진행 |
 | **레이팅** | 다인전 Elo(모든 참가자 쌍을 1:1로 보고 평균). 봇은 레이팅 계산에서 제외(봇 파밍 방지), 중도 이탈도 기록(패배 회피 방지) |
-| **장애 격리** | 틱 처리 중 예외는 그 룸만 `error`로 종료(결과 전송·저장)하고 다른 매치는 계속. WS 메시지 핸들러 예외도 메시지 단위로 격리. 잘못된 설정은 **기동 시점에 실패**(운영에서 기본/짧은 시크릿 거부) |
-| **운영** | 구조화 JSON 로그, Prometheus `/metrics`(틱 p50/p99, 드롭된 스냅샷, DB 오류 등), `/health`, Graceful shutdown 시 진행 중 매치 결과를 저장한 뒤 종료 |
+| **장애 격리** | 틱 처리 중 예외는 그 룸만 `error`로 종료(결과 전송·저장)하고 다른 매치는 계속. WS 메시지 핸들러 예외도 메시지 단위로 격리. `ROOM_WORKERS` 모드에서는 워커 프로세스 크래시 시 해당 룸을 정리하고 워커를 자동 재시작. 잘못된 설정은 **기동 시점에 실패**(운영에서 기본/짧은 시크릿 거부) |
+| **운영** | 구조화 JSON 로그, Prometheus `/metrics`(`METRICS_TOKEN` Bearer 또는 루프백 전용, 워커 카운터·틱 p50/p99 집계), `TRUST_PROXY` 프록시 IP 추출, CSP·보안 헤더, `/health`, Graceful shutdown 시 진행 중 매치 결과를 저장한 뒤 종료 |
 | **에셋** | 이미지 파일 없이 Canvas로 렌더링. 파비콘(SVG)·OG 이미지·iOS 아이콘은 원본 HTML/SVG에서 헤드리스 브라우저로 렌더링(`scripts/assets`) |
 | **의존성 최소화** | 런타임 의존성은 `ws`와(선택) `@supabase/supabase-js` 뿐. 웹 프레임워크·ORM·빌드 단계 없음 (Node 24 타입 스트리핑으로 `.ts` 직접 실행, `node:sqlite` 내장 모듈 사용) |
 
@@ -48,20 +48,21 @@ flowchart LR
     C --- S1[shared/sim.js]
   end
 
-  subgraph "Node.js 서버 (단일 프로세스)"
-    H[HTTP API<br/>http/api.ts] --> R[(Repository)]
+  subgraph "Node.js 서버 (단일 프로세스 / ROOM_WORKERS 로컬 워커)"
+    H[HTTP API · OAuth<br/>http/api.ts · auth/github.ts] --> R[(Repository)]
     G[WS Gateway<br/>net/gateway.ts] --> MM[Matchmaker]
-    MM --> RM1[Room 30Hz]
-    MM --> RM2[Room 30Hz]
+    MM --> RP[RoomPool<br/>선택적 워커 IPC]
+    RP --> RM1[Room 30Hz<br/>in-process 또는 room-worker]
+    RP --> RM2[Room 30Hz<br/>in-process 또는 room-worker]
     RM1 --- S2[shared/sim.js]
     RM1 -- 매치 종료 --> R
   end
 
   R --> SQ[(SQLite<br/>WAL)]
-  R -.DB_DRIVER=supabase.-> SB[(Supabase<br/>PostgreSQL)]
+  R -.DB_DRIVER=supabase.-> SB[(Supabase<br/>PostgreSQL · Auth)]
 
-  UI -- "POST /api/auth/guest<br/>GET /api/leaderboard" --> H
-  C == "WebSocket /ws?v=4&token=…<br/>input 30Hz ↑ (JSON) / snapshot 15Hz ↓ (binary)" ==> G
+  UI -- "POST /api/auth/guest · /github<br/>GET /api/leaderboard" --> H
+  C == "WebSocket /ws?v=5&token=…<br/>input 30Hz ↑ (JSON) / snapshot 15Hz ↓ (binary)" ==> G
 ```
 
 ### 한 틱에서 일어나는 일 (`Room` → `GameWorld`)
@@ -110,7 +111,7 @@ sequenceDiagram
   - 서버는 틱마다 위치를 링버퍼에 기록하고, 그 사수가 쏜 탄을 `현재 틱 − rewind` 시점 위치로 판정합니다. 위치는 두 기록 사이를 선형 보간해, 클라이언트가 그린 위치와 같습니다.
   - 탄도 피격자도 같은 시간축에 있으므로 **"내 화면에서 맞혔으면 맞는다"**가 성립합니다.
 - **조작 방지:** `rt`는 클라이언트가 보내는 값이라 조작될 수 있습니다.
-  - 되감기는 `[0, LAG_COMP_MAX_TICKS]`(250ms)로 제한하고, 미래 시점은 0으로 처리합니다.
+  - 전역 상한 `[0, LAG_COMP_MAX_TICKS]`(250ms) 제한에 더해, 서버가 WebSocket ping/pong으로 측정한 클라이언트 RTT를 바탕으로 `maxRewind = clamp((RTT + INTERP_DELAY_MS + 50ms) / TICK_MS, 0, LAG_COMP_MAX_TICKS)`를 계산해 저지연 사수의 과도한 백트랙 조작을 차단합니다. 미래 시점은 0으로 처리합니다.
   - 지금 죽어 있는 대상은 과거 위치로도 맞지 않고, 사망·리스폰 경계 구간은 판정하지 않습니다.
 - **트레이드오프:** 고지연 사수에게 유리한 만큼, 피격자는 "이미 엄폐했는데 맞는" 상황을 최대 250ms까지 겪습니다. 상한값이 이 균형을 정합니다.
 - **결정성 유지:** 되감기 양은 탄 상태에 포함되고 상태 해시에도 들어가므로, 리플레이 테스트가 그대로 성립합니다.
@@ -246,15 +247,18 @@ match_players  (match_id, player_id, nickname, score, kills, deaths, placement, 
 |---|---|---|
 | POST | `/api/auth/guest` | `{nickname}` → 게스트 계정 + 서명 토큰 발급 (IP당 분당 5회) |
 | GET | `/api/auth/providers` | GitHub 로그인 사용 여부 |
+| POST | `/api/auth/github` | GitHub OAuth PKCE 시작 URL 발급 (`Origin` 검증 + `HttpOnly` verifier 쿠키) |
+| GET | `/api/auth/github/callback` | OAuth 코드 교환 후 일회성 핸드오프 쿠키 발급 및 `303` 리다이렉트 |
+| POST | `/api/auth/github/session` | 일회성 핸드오프 쿠키로 게임 세션 토큰 발급 (`Origin` 검증) |
 | GET | `/api/me` | 내 정보 + 최근 전적 (Bearer 토큰) |
 | GET | `/api/leaderboard?limit=20` | 레이팅 순위 |
 | GET | `/api/matches/recent?limit=10` | 최근 매치 |
 | GET | `/api/players/:id` | 플레이어 프로필 + 전적 |
 | GET | `/api/stats` | 접속자, 룸 수, 대기열, 틱 처리 시간 |
 | GET | `/health` | DB 연결 포함 헬스체크 (실패 시 503) |
-| GET | `/metrics` | Prometheus 포맷 |
+| GET | `/metrics` | Prometheus 포맷 (`METRICS_TOKEN` Bearer 인증 또는 미설정 시 루프백 전용) |
 
-모든 `/api/*`는 IP별 토큰 버킷 레이트 리밋이 적용됩니다.
+모든 `/api/*`와 `/metrics`에는 IP별 토큰 버킷 레이트 리밋이 적용되며(`TRUST_PROXY` 설정 시 신뢰된 프록시 홉 수만큼 `X-Forwarded-For`에서 클라이언트 IP를 추출), 모든 HTTP 응답에 CSP·`X-Frame-Options: DENY`·`X-Content-Type-Options: nosniff` 보안 헤더를 포함합니다.
 
 ### WebSocket `/ws?v=<PROTOCOL_VERSION>&token=…`
 
@@ -274,12 +278,17 @@ match_players  (match_id, player_id, nickname, score, kills, deaths, placement, 
 | 오브 (flags&1일 때만) | 1 + 5B × nO | `u8 nO`, 각 `u8 id` · `u16 x,y` |
 | 이벤트 × nEv | 5B | `u8 kind(1 hit·2 kill·3 orb)` · `u16 a,b` |
 
-델타 프레임(`type=2`)은 플레이어·탄환 영역을 `u32 baseTick`, 변경 바이트 비트맵, 변경된 바이트로 대체합니다. WebSocket이 전송 순서를 보장하므로 이전 프레임을 보낸 연결에만 델타를 사용합니다. 새 연결, 재접속, 전송 누락, 엔티티 수 변경 또는 델타가 더 큰 경우에는 전체 프레임을 보냅니다.
+v5 델타 프레임(`type=2`, 헤더 19B: `u8 type=2 · u32 ack · u32 tick · u32 rem · u32 baseTick · u8 flags · u8 nEv`)은 엔티티 ID 기준으로 변경분만 인코딩합니다.
+
+- **플레이어 델타:** 이탈 `eid` 목록 + 변경된 플레이어의 `eid`·1B 필드 비트마스크(8개 구간 중 바뀐 필드만 전송, 미변경 플레이어는 0B, 신규 플레이어는 전체 20B)
+- **탄환 델타:** 이전 프레임 탄환 수 기준 제거 비트맵(`⌈nB_base/8⌉` B) + 생존 탄환의 `i16 x,y`(4B, ID 재사용) + 신규 탄환(`u16 nBAdd` + 각 8B)
+
+따라서 교전 중 탄환이 매 틱 생성·소멸되어 개수가 바뀌더라도 델타 프레임이 유지됩니다. 새 연결, 재접속, 전송 누락 또는 델타가 전체 프레임 이상인 경우에는 전체 프레임을 보냅니다.
 
 - **좌표 정밀도:** 플레이어 좌표는 `f32`입니다. 클라이언트는 자기 위치를 이 값으로 되돌린 뒤 입력을 재적용하므로, 양자화 오차가 곧 보정 오차가 되기 때문입니다. 탄환·오브는 그리기만 하므로 고정소수점으로 충분합니다.
-- **v3 크기 (8인 매치 평균):** JSON 704B → 바이너리 322B → 오브 델타 적용 시 275B. v4는 플레이어·탄환 델타를 추가합니다.
+- **대역폭 비교 (8인 매치 기준):** v2 JSON `8.7 KB/s` → v3 바이너리+오브 델타 `3.4 KB/s` → **v5 엔티티 ID 필드 델타 `~1.9 KB/s`**(v2 JSON 대비 **−78%**, v3 대비 **−44%**).
 
-핸드셰이크 거부: `401` 토큰 무효/만료 · `426` 프로토콜 버전 불일치 (`/health`의 `protocolVersion`으로 원인 확인)
+핸드셰이크 거부: `401` 토큰 무효/만료/미존재 계정 · `426` 프로토콜 버전 불일치 (`/health`의 `protocolVersion`으로 원인 확인)
 
 WS 종료 코드: `4001` 다른 곳에서 접속 · `4002` 프레임 해석 실패 후 재접속 · `4008` 레이트 리밋 초과 · `1001` 서버 종료
 
@@ -294,48 +303,53 @@ GUEST_RATE_PER_MIN=100000 API_RATE_PER_SEC=10000 npm start
 ```
 
 ```bash
-node scripts/loadtest.ts 256 20
+node scripts/loadtest.ts 256 15
 ```
 
-측정 환경: Windows 11, Node 24.15, **부하 생성기와 서버를 같은 머신에서 실행** (실제 네트워크 지연 없음)
+측정 환경: Windows 11, Node 24.18, 15초 측정, **부하 생성기와 서버를 같은 머신에서 실행** (실제 네트워크 지연 없음)
 
-| 동시 접속 | 룸 | 틱 처리 평균 | 틱 p99 | 틱 최대 | RTT p50 / p99 | 스냅샷 간격 p50 / p99 | 하행 대역폭 |
+| 동시 접속 (모드) | 룸 | 틱 처리 평균 | 틱 p99 | 틱 최대 | RTT p50 / p99 | 스냅샷 간격 p50 / p99 | 하행 대역폭 |
 |---|---|---|---|---|---|---|---|
-| 64 | 8 | 0.18 ms | 0.80 ms | 2.1 ms | 2.0 / 3.8 ms | 65 / 81 ms | 217 KB/s (JSON 시절 546) |
-| 256 | 32 | 0.14 ms | 0.62 ms | 0.9 ms | 6.1 / 13.2 ms | 66 / 83 ms | 865 KB/s (JSON 시절 2.2 MB/s) |
+| 64 (단일) | 8 | 0.19 ms | 0.76 ms | 1.4 ms | 2.0 / 3.8 ms | 63.1 / 79.9 ms | 123 KB/s (v3 217 · JSON 546) |
+| 256 (단일) | 32 | 0.14 ms | 0.59 ms | 1.0 ms | 3.8 / 13.5 ms | 63.5 / 81.1 ms | 480 KB/s (v3 865 · JSON 2.2 MB/s) |
+| 256 (`ROOM_WORKERS=2`) | 32 | 0.10 ms | 0.47 ms | 3.0 ms | 1.9 / 5.0 ms | 65.1 / 83.8 ms | 484 KB/s |
 
-- 틱 예산 33.3ms 대비 룸 하나의 틱 처리 비용은 **약 0.16ms** → 32개 룸 × 30Hz를 돌려도 CPU 한 코어의 약 15% 수준
-- 스냅샷 간격 p50 ≈ 64ms로 목표 15Hz(66.7ms)를 유지
-- 하행 대역폭은 클라이언트당 약 3.4KB/s입니다. 프로토콜 v2(JSON)의 8.7KB/s에서 **−61%** 줄었습니다(바이너리 스냅샷 + 오브 델타).
+- 틱 예산 33.3ms 대비 룸 하나의 틱 처리 비용은 **0.10~0.19ms** → 32개 룸 × 30Hz에서도 여유가 크며, `ROOM_WORKERS=2`로 룸 시뮬레이션을 워커로 분리하면 게이트웨이 RTT p99가 **13.5ms → 5.0ms(−63%)** 로 낮아집니다.
+- 스냅샷 간격 p50 ≈ 63~65ms로 목표 15Hz(66.7ms)를 유지합니다.
+- 하행 대역폭은 클라이언트당 약 **1.9 KB/s**로, 프로토콜 v2(JSON)의 8.7 KB/s 대비 **−78%**, v3의 3.4 KB/s 대비 **−44%** 절감되었습니다(v5 엔티티 ID 필드 델타).
 
 ---
 
 ## 프로젝트 구조
 
 ```
-shared/sim.js          서버·클라이언트 공용 결정적 시뮬레이션 (이동, 충돌, 스윕 판정, 상수, 프로토콜 버전)
-shared/codec.js        서버·클라이언트 공용 바이너리 스냅샷 코덱
+shared/sim.js          서버·클라이언트 공용 결정적 시뮬레이션 (이동, 충돌, 스윕 판정, RTT 상한, 상수, 프로토콜 버전)
+shared/codec.js        서버·클라이언트 공용 바이너리 스냅샷 코덱 (v5 엔티티 ID 필드 델타)
 src/
   server.ts            엔트리포인트 + graceful shutdown
-  app.ts               조립(composition root): 설정 → DB → 매치메이커 → HTTP/WS
+  app.ts               조립(composition root): 설정 → DB → 워커 풀 → 매치메이커 → HTTP/WS
   config.ts            환경변수 설정 + 기동 시 검증(fail fast)
   auth/token.ts        HMAC-SHA256 서명 토큰 (상수 시간 비교)
-  net/gateway.ts       WS 업그레이드 인증, 세션, 하트비트, 레이트 리밋, 메시지 라우팅
+  auth/github.ts       Supabase PKCE 기반 GitHub OAuth 어댑터
+  net/gateway.ts       WS 업그레이드 인증(서명+DB 실존), RTT 측정, 세션, 하트비트, 레이트 리밋
   net/protocol.ts      클라이언트 메시지 검증
   game/world.ts        순수 게임 규칙(이동·탄환·오브·리스폰), 지연 보상 히스토리, 상태 해시 — I/O 없음
-  game/room.ts         세션 계층: 좌석·재접속, 30Hz 루프, 장애 격리, 스냅샷, 결과 저장
+  game/room.ts         세션 계층: 좌석·재접속, 30Hz 루프, 장애 격리, v5 스냅샷, 결과 저장
+  game/room-pool.ts    로컬 룸 워커 풀 관리, 최소 부하 워커 배정, 메트릭 집계, 크래시 복구
+  game/room-worker.ts  자식 프로세스 룸 실행기 (IPC 통신)
+  game/room-ipc.ts     게이트웨이 ↔ 워커 프로세스 간 IPC 메시지 타입
   game/inputBuffer.ts  플레이어별 입력 파이프라인 (seq 검증, 큐 상한, 틱당 예산)
   game/ranking.ts      경쟁 순위(1224) 계산
   game/matchmaker.ts   대기열, 봇 채움, 난입, 룸 수명주기
   game/bot.ts          봇 AI (사람과 같은 입력 파이프라인 사용)
   db/                  Repository 인터페이스, SQLite·Supabase 구현, Elo 레이팅
-  http/api.ts          REST API + 정적 파일 (경로 탈출 방지)
+  http/api.ts          REST API, GitHub OAuth 핸드오프, 프록시 IP·/metrics 보호, 정적 파일(CSP)
   util/                JSON 로거, 토큰 버킷, Prometheus 메트릭, 시드 RNG, 재시도
 public/                브라우저 클라이언트 (Canvas, 빌드 없음), 파비콘·OG 이미지
 scripts/assets/        OG 이미지 원본 HTML + PNG 렌더러 (`node scripts/assets/render.ts`, 헤드리스 Chrome/Edge)
-supabase/migrations/   Postgres 스키마, RLS, record_match()(멱등)·player_matches() 함수
+supabase/migrations/   Postgres 스키마, RLS, record_match()(멱등·원자 Elo)·player_matches()·github_accounts
 supabase/config.toml   CI용 로컬 Supabase 스택 설정
-test/                  단위·룸·코덱·통합(E2E)·Repository 계약·Supabase 스키마(PGlite) 테스트 — node:test
+test/                  단위·매치메이커·룸·코덱·통합(E2E/OAuth/워커복구)·Repository 계약·Supabase 스키마(PGlite) 테스트 — node:test
 scripts/loadtest.ts    부하 테스트
 .github/workflows/     CI: typecheck → test → (Supabase 로컬 스택 계약 테스트 | Docker 빌드 + /health 스모크 테스트)
 ```
@@ -346,19 +360,19 @@ scripts/loadtest.ts    부하 테스트
 npm run check   # tsc + 테스트
 ```
 
-`node:test` 49개(Supabase 계약 테스트 1개는 자격 증명이 있을 때만), GitHub Actions에서 push/PR마다 실행됩니다.
+`node:test` **65개**(Supabase 계약 테스트 2개는 자격 증명이 있을 때만 실행, 로컬 기본 63개 통과), GitHub Actions에서 push/PR마다 실행됩니다.
 
 - **시뮬레이션:** 결정성, 충돌, **서버==예측 일치**, 선분-원/사각형 교차(터널링 방지), 가장자리를 스치는 탄 적중
 - **리플레이:** 같은 시드 + 같은 입력 로그 600틱 → **상태 해시 일치**. 이 테스트로 봇 ID가 `randomUUID()`라 결정성이 깨지던 문제를 찾아 고쳤습니다.
-- **지연 보상:** 화면에서 맞힌 탄은 피격자가 이미 피했어도 적중, 오래전에 피한 대상은 빗나감, rt 조작 시 상한 클램프, 히스토리 보간, rt 검증
-- **안티치트:** 입력 예산(4배 입력 공격 시 처리율 제한), seq 리플레이 거부
-- **게임 흐름:** 사격→사망→리스폰, 재접속 유예, 같은 매치 재입장 시 기록 복원(+DB 중복 저장 방지)
-- **장애 대응:** 틱 예외 시 룸 격리 종료, DB 일시 장애 재시도
-- **영속화:** 매치 종료→DB→레이팅, 경쟁 순위, SQLite·Supabase 공통 **Repository 계약**(멱등 재시도, 전적 정렬 후 limit)
-- **Supabase 스키마:** PGlite에서 실제 마이그레이션 적용, `record_match` 원자성·멱등성, RLS·권한
-- **코덱:** 바이너리 왕복 정밀도, 잘린 프레임 거부, JSON 대비 크기, 오브 델타(첫 전송·변화·혼잡 후·재접속 시 재전송)
-- **보안·설정:** 토큰 변조/만료, 레이트 리밋, 프로토콜 검증, 설정 검증(운영 시크릿)
-- **HTTP/WS:** REST 인증, WS 401 거부, 프로토콜 버전 426 거부, 중복 접속 4001
+- **지연 보상:** 화면에서 맞힌 탄은 피격자가 이미 피했어도 적중, 오래전에 피한 대상은 빗나감, rt 조작 시 상한 클램프, **서버 측정 RTT 기반 동적 상한(저지연 백트랙 방어)**, 히스토리 보간, rt/maxRewind 검증
+- **안티치트:** 입력 예산(4배 입력 공격 시 처리율 제한), seq 0/역순/리플레이 거부
+- **게임 흐름 & 매치메이커:** 사격→사망→리스폰, 재접속 유예, 초기/재접속 `ack=0` 회귀 검증, 같은 매치 재입장 시 기록 복원(+DB 중복 저장 방지), 대기열 풀방 시작·봇 채움·난입(봇 양보)·이탈·셧다운
+- **장애 대응 & 룸 워커:** 틱 예외 시 룸 격리 종료, DB 일시 장애 재시도, 다중 워커 라우팅·메트릭 집계·워커 프로세스 크래시 시 자동 재시작 및 복구
+- **영속화:** 매치 종료→DB→레이팅, 경쟁 순위, SQLite·Supabase 공통 **Repository 계약**(멱등 재시도, 동시 매치 레이팅 일관성, 전적 정렬 후 limit)
+- **Supabase 스키마:** PGlite에서 실제 마이그레이션 적용, `record_match` 원자성·멱등성·SQL 내 Elo 계산, `github_accounts`·`get_or_create_github_player()` 멱등성 및 RLS·권한
+- **코덱:** 바이너리 왕복 정밀도, 잘린 프레임 거부, JSON 대비 크기, 오브 델타, **v5 엔티티 ID 필드 델타**(플레이어 합류/이탈/정지 0B, 탄환 생성/소멸/생존 4B, 8인 교전 중 델타 적중 및 전송량 절감)
+- **보안·설정:** 토큰 변조/만료, 레이트 리밋, `TRUST_PROXY` 프록시 IP 추출, `/metrics` Bearer 토큰/루프백 접근 제어, CSP·보안 헤더, GitHub OAuth(PKCE·Origin·일회성 핸드오프), 프로토콜·설정 검증
+- **HTTP/WS:** REST 인증, WS 401(무효 토큰 및 미존재 DB 계정) 거부, 프로토콜 버전 426 거부, 중복 접속 4001
 - **E2E:** 로그인→매칭→스냅샷→종료→리더보드
 
 ---

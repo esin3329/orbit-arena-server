@@ -19,8 +19,8 @@ export const MAX_INPUT_QUEUE = 8;
 export class InputBuffer {
   private queue: PlayerInput[] = [];
   private credit = 1;
-  /** 마지막으로 시뮬레이션에 적용된 seq — 스냅샷 ack 로 클라이언트에 전달된다 */
-  lastProcessedSeq = -1;
+  /** 마지막으로 시뮬레이션에 적용된 seq — 스냅샷 ack 로 클라이언트에 전달된다 (0 = 아직 없음) */
+  lastProcessedSeq = 0;
 
   get length() {
     return this.queue.length;
@@ -59,7 +59,7 @@ export class InputBuffer {
   /** 새 클라이언트로 재접속: seq 를 처음부터 다시 센다 */
   reset() {
     this.queue.length = 0;
-    this.lastProcessedSeq = -1;
+    this.lastProcessedSeq = 0;
   }
 
   /** 테스트용 */

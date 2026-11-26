@@ -44,7 +44,7 @@ export function createGitHubAuth(supabaseUrl: string, publishableKey: string, or
       const { data, error } = await auth.exchangeCodeForSession(code);
       const user = data.user;
       if (error || !user?.identities?.some((identity) => identity.provider === 'github')) return null;
-      const username = user.user_metadata.user_name;
+      const username = user.user_metadata?.user_name;
       const nickname = typeof username === 'string' && /^[a-z\d-]{2,}$/i.test(username)
         ? username.slice(0, 16)
         : `GitHub-${user.id.slice(0, 8)}`;

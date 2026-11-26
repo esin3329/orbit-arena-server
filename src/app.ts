@@ -16,6 +16,7 @@ export interface App {
   server: Server;
   repo: Repository;
   matchmaker: Matchmaker;
+  pool?: RoomPool;
   listen(port?: number, host?: string): Promise<number>;
   close(): Promise<void>;
 }
@@ -49,13 +50,15 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
       tokenTtlSec: cfg.tokenTtlSec,
       apiRatePerSec: cfg.apiRatePerSec,
       guestRatePerMin: cfg.guestRatePerMin,
+      trustProxy: cfg.trustProxy,
+      metricsToken: cfg.metricsToken,
       github,
       onlineCount: () => onlineCount(),
     }),
   );
   server.keepAliveTimeout = 5_000;
   server.headersTimeout = 10_000;
-  const gateway = attachGateway(server, { matchmaker, secret: cfg.tokenSecret });
+  const gateway = attachGateway(server, { matchmaker, repo, secret: cfg.tokenSecret });
   onlineCount = () => gateway.sessions.size;
 
   metrics.gauge('players_online', () => gateway.sessions.size);
@@ -70,6 +73,7 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
     server,
     repo,
     matchmaker,
+    pool,
     listen(port = cfg.port, host = cfg.host) {
       return new Promise((resolve) => {
         server.listen(port, host, () => resolve((server.address() as AddressInfo).port));

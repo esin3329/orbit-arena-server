@@ -35,7 +35,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'ping':
       return isNum(o.ts) ? { t: 'ping', ts: o.ts } : null;
     case 'input': {
-      if (!Number.isSafeInteger(o.seq) || (o.seq as number) < 0 || (o.seq as number) > 0x7fffffff) return null;
+      if (!Number.isSafeInteger(o.seq) || (o.seq as number) < 1 || (o.seq as number) > 0x7fffffff) return null;
       if (!isNum(o.dx) || !isNum(o.dy) || !isNum(o.aim)) return null;
       return {
         t: 'input',

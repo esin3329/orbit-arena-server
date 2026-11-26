@@ -167,6 +167,9 @@ export class RoomPool {
 
   get readyCount() { return this.workers.filter((worker) => worker.ready).length; }
   get activeCount() { return this.workers.filter((worker) => worker.rooms.size > 0).length; }
+  workerPidOf(roomId: string): number | undefined {
+    return this.workers.find((worker) => worker.rooms.has(roomId))?.child.pid;
+  }
 
   async start() {
     try {
@@ -178,7 +181,7 @@ export class RoomPool {
   }
 
   create: CreateRoom = (options, onEnd) => {
-    if (this.workers.length < this.count) {
+    while (this.workers.length < this.count) {
       void this.spawn().catch((err) => logger.error('room worker restart failed', errorFields(err)));
     }
     const worker = this.workers.reduce((a, b) => a.rooms.size <= b.rooms.size ? a : b);
@@ -199,8 +202,9 @@ export class RoomPool {
           clearTimeout(startupTimeout);
           worker.ready = true;
           resolve();
-        } else if (event.type === 'ticks') {
+        } else if (event.type === 'metrics') {
           for (const ms of event.samples) metrics.observeTick(ms);
+          for (const [name, delta] of Object.entries(event.counters)) metrics.inc(name, delta);
         } else {
           worker.rooms.get(event.roomId)?.receive(event);
         }
@@ -221,7 +225,8 @@ export class RoomPool {
 
   async close() {
     clearInterval(this.flow);
-    await Promise.all(this.workers.map((worker) => new Promise<void>((resolve) => {
+    await Promise.all([...this.workers].map((worker) => new Promise<void>((resolve) => {
+      if (worker.child.exitCode !== null || worker.child.signalCode !== null) return resolve();
       worker.child.once('close', () => {
         clearTimeout(timer);
         resolve();

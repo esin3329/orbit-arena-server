@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
@@ -24,6 +25,32 @@ const MIME: Record<string, string> = {
 };
 const NICK_RE = /^[\p{L}\p{N}_ -]{2,16}$/u;
 const MAX_BODY = 4 * 1024;
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' https://cdn.jsdelivr.net",
+  "font-src 'self' https://cdn.jsdelivr.net",
+  "img-src 'self' data:",
+  "connect-src 'self' ws: wss:",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest();
+const safeEq = (a: string, b: string) => timingSafeEqual(sha256(a), sha256(b));
+
+export function clientIp(req: IncomingMessage, trustProxy: number): string {
+  const remote = req.socket.remoteAddress ?? 'unknown';
+  if (trustProxy <= 0) return remote;
+  const xff = req.headers['x-forwarded-for'];
+  const raw = Array.isArray(xff) ? xff.join(',') : xff;
+  if (!raw) return remote;
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return remote;
+  return parts[Math.max(0, parts.length - trustProxy)];
+}
 
 export interface ApiDeps {
   repo: Repository;
@@ -32,6 +59,8 @@ export interface ApiDeps {
   tokenTtlSec: number;
   apiRatePerSec: number;
   guestRatePerMin: number;
+  trustProxy?: number;
+  metricsToken?: string;
   onlineCount: () => number;
   github?: ReturnType<typeof createGitHubAuth> & { getPlayer(id: string, nickname: string): Promise<PlayerRecord> };
 }
@@ -86,6 +115,7 @@ function authCookie(name: string, value: string, age: number, secure: boolean) {
 
 export function createHttpHandler(deps: ApiDeps) {
   const { repo, matchmaker, secret } = deps;
+  const trustProxy = deps.trustProxy ?? 0;
   const limiter = new KeyedRateLimiter(deps.apiRatePerSec * 3, deps.apiRatePerSec); // IP 당 버스트 3초분
   const guestLimiter = new KeyedRateLimiter(deps.guestRatePerMin, deps.guestRatePerMin / 60); // 게스트 생성 남용 방지
   setInterval(() => {
@@ -103,7 +133,7 @@ export function createHttpHandler(deps: ApiDeps) {
   };
 
   async function route(req: IncomingMessage, res: ServerResponse, url: URL) {
-    const ip = req.socket.remoteAddress ?? 'unknown';
+    const ip = clientIp(req, trustProxy);
     const { pathname } = url;
     const method = req.method ?? 'GET';
 
@@ -118,6 +148,18 @@ export function createHttpHandler(deps: ApiDeps) {
       });
     }
     if (pathname === '/metrics') {
+      if (!limiter.take(ip)) throw new HttpError(429, 'too many requests');
+      if (deps.metricsToken) {
+        const h = req.headers.authorization ?? '';
+        const provided = h.startsWith('Bearer ') ? h.slice(7) : '';
+        if (!provided || !safeEq(provided, deps.metricsToken)) {
+          res.setHeader('www-authenticate', 'Bearer');
+          throw new HttpError(401, 'unauthorized');
+        }
+      } else {
+        const remote = req.socket.remoteAddress ?? '';
+        if (!LOOPBACK.has(remote)) throw new HttpError(403, 'forbidden');
+      }
       res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
       return res.end(metrics.toPrometheus());
     }
@@ -239,8 +281,16 @@ export function createHttpHandler(deps: ApiDeps) {
   }
 
   return (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
     res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+    res.setHeader('content-security-policy', CSP);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost');
+    } catch {
+      return json(res, 400, { error: 'bad url' });
+    }
     route(req, res, url).catch((err) => {
       if (err instanceof HttpError) return json(res, err.status, { error: err.message });
       if (err instanceof URIError) return json(res, 400, { error: 'bad path' });

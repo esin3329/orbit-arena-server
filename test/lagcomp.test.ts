@@ -13,7 +13,7 @@ import { createRng } from '../src/util/rng.ts';
  * @param victimMovesAt 피격자가 피하는 틱 (F 기준 상대값)
  * @param rtOffset      사수가 보낸 rt (F 기준 상대값), null 이면 rt 없음(보상 없음)
  */
-function scenario(victimMovesAt: number, rtOffset: number | null) {
+function scenario(victimMovesAt: number, rtOffset: number | null, maxRewind?: number) {
   const world = new GameWorld(createRng(1));
   const shooter = world.spawn('s', 'S', false);
   const victim = world.spawn('v', 'V', false);
@@ -30,6 +30,7 @@ function scenario(victimMovesAt: number, rtOffset: number | null) {
     if (next === F) {
       const input: PlayerInput = { seq: 1, dx: 0, dy: 0, aim: 0, fire: true, dash: false };
       if (rtOffset !== null) input.rt = F + rtOffset;
+      if (maxRewind !== undefined) input.maxRewind = maxRewind;
       world.step(new Map([['s', [input]]]));
     } else world.step(empty);
   }
@@ -72,10 +73,24 @@ test('positionAt: 기록 사이를 선형 보간하고, 범위 밖/사망 구간
   assert.equal(world.positionAt(e, -5), null, '기록 없는 과거');
 });
 
-test('프로토콜: rt 는 선택 필드, 음수/비정상 값은 버린다', () => {
+test('프로토콜: rt 는 선택 필드, 음수/비정상 값 및 maxRewind 주입은 버린다', () => {
   const base = { t: 'input', seq: 1, dx: 0, dy: 0, aim: 0, fire: true, dash: false };
-  assert.equal((parseClientMessage(JSON.stringify({ ...base, rt: 12.5 })) as any).rt, 12.5);
+  assert.equal((parseClientMessage(JSON.stringify({ ...base, rt: 12.5, maxRewind: 999 })) as any).rt, 12.5);
+  assert.equal('maxRewind' in (parseClientMessage(JSON.stringify({ ...base, rt: 12.5, maxRewind: 999 })) as any), false);
   assert.equal('rt' in (parseClientMessage(JSON.stringify({ ...base, rt: -1 })) as any), false);
   assert.equal('rt' in (parseClientMessage(JSON.stringify({ ...base, rt: 'x' })) as any), false);
   assert.equal('rt' in (parseClientMessage(JSON.stringify(base)) as any), false);
+});
+
+test('RTT 기반 지연 보상 동적 상한: 저지연 사수는 최대치까지 백트랙할 수 없다', () => {
+  assert.equal(sim.maxRewindTicksForRtt(null), sim.LAG_COMP_MAX_TICKS);
+  assert.equal(sim.maxRewindTicksForRtt(undefined), sim.LAG_COMP_MAX_TICKS);
+  assert.ok(Math.abs(sim.maxRewindTicksForRtt(0) - (sim.INTERP_DELAY_MS + sim.LAG_COMP_MARGIN_MS) / sim.TICK_MS) < 1e-9);
+  assert.ok(Math.abs(sim.maxRewindTicksForRtt(-50) - sim.maxRewindTicksForRtt(0)) < 1e-9);
+  assert.ok(Math.abs(sim.maxRewindTicksForRtt(50) - (50 + sim.INTERP_DELAY_MS + sim.LAG_COMP_MARGIN_MS) / sim.TICK_MS) < 1e-9);
+  assert.equal(sim.maxRewindTicksForRtt(200), sim.LAG_COMP_MAX_TICKS);
+
+  // 피격자가 F-1 시점에 이미 피함: 7틱 되감으면 맞지만(F-2), RTT=0ms 상한(4.8틱)에서는 빗나간다
+  assert.equal(scenario(-1, -sim.LAG_COMP_MAX_TICKS), HIT);
+  assert.equal(scenario(-1, -sim.LAG_COMP_MAX_TICKS, sim.maxRewindTicksForRtt(0)), sim.MAX_HP);
 });

@@ -10,11 +10,12 @@
  */
 
 /** 클라이언트/서버 메시지 형식이 바뀌면 올린다. 불일치 시 서버가 WS 업그레이드를 426 으로 거부 */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export const TICK_RATE = 30;
 export const TICK_MS = 1000 / TICK_RATE;
 export const DT = 1 / TICK_RATE;
+export const INTERP_DELAY_MS = 110;
 
 export const ARENA_W = 1600;
 export const ARENA_H = 1000;
@@ -43,6 +44,17 @@ export const RESPAWN_TICKS = 60;
  */
 export const LAG_COMP_MAX_MS = 250;
 export const LAG_COMP_MAX_TICKS = Math.round(LAG_COMP_MAX_MS / TICK_MS);
+export const LAG_COMP_MARGIN_MS = 50;
+
+/**
+ * 서버가 측정한 클라이언트 RTT 를 바탕으로 허용할 최대 지연 보상 되감기 틱을 계산한다.
+ * RTT 를 아직 측정하지 못한 경우(null/undefined)에는 전역 상한(LAG_COMP_MAX_TICKS)을 사용한다.
+ * @param {number | null | undefined} rttMs
+ */
+export function maxRewindTicksForRtt(rttMs) {
+  if (rttMs == null || !Number.isFinite(rttMs)) return LAG_COMP_MAX_TICKS;
+  return clamp((Math.max(0, rttMs) + INTERP_DELAY_MS + LAG_COMP_MARGIN_MS) / TICK_MS, 0, LAG_COMP_MAX_TICKS);
+}
 
 export const KILL_SCORE = 10;
 export const ORB_SCORE = 1;
@@ -50,7 +62,8 @@ export const ORB_SCORE = 1;
 /** @typedef {{ x: number, y: number, w: number, h: number }} Rect */
 /**
  * rt: 입력을 만들 때 클라이언트 화면에 보이던 서버 틱(보간 시점, 소수 가능) — 지연 보상에 사용
- * @typedef {{ seq: number, dx: number, dy: number, aim: number, fire: boolean, dash: boolean, rt?: number }} PlayerInput
+ * maxRewind: 서버가 측정한 RTT 기반으로 제한한 최대 되감기 틱(서버 전용, 클라이언트 입력에서는 무시)
+ * @typedef {{ seq: number, dx: number, dy: number, aim: number, fire: boolean, dash: boolean, rt?: number, maxRewind?: number }} PlayerInput
  */
 /** @typedef {{ x: number, y: number, dashTicks: number, dashCd: number }} MoveState */
 
