@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as sim from '../shared/sim.js';
-import { decodeSnapshot } from '../shared/codec.js';
+import { createSnapshotDecoder } from '../shared/codec.js';
 import { Room } from '../src/game/room.ts';
 import type { PlayerConnection, PlayerInput } from '../src/game/types.ts';
 import { SqliteRepository } from '../src/db/sqlite.ts';
@@ -13,6 +13,7 @@ class FakeConn implements PlayerConnection {
   readonly playerId: string;
   readonly nickname: string;
   messages: any[] = [];
+  private decodeSnapshot = createSnapshotDecoder();
   constructor(playerId: string, nickname = playerId) {
     this.playerId = playerId;
     this.nickname = nickname;
@@ -21,7 +22,7 @@ class FakeConn implements PlayerConnection {
   send(data: string | Uint8Array) {
     if (typeof data === 'string') return void this.messages.push(JSON.parse(data));
     this.bytes.push(data.byteLength);
-    this.messages.push(decodeSnapshot(data));
+    this.messages.push(this.decodeSnapshot(data));
   }
   isCongested() {
     return false;

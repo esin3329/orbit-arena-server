@@ -9,7 +9,7 @@
  *  - 서버와 "같은" shared/sim.js 를 import 해서 예측 결과가 서버와 일치
  */
 import * as sim from '/shared/sim.js';
-import { decodeSnapshot } from '/shared/codec.js';
+import { createSnapshotDecoder } from '/shared/codec.js';
 
 const INTERP_DELAY_MS = 110;
 const MAX_SNAPS = 40;
@@ -180,11 +180,19 @@ function connect() {
     setBadge(true);
   };
   sock.binaryType = 'arraybuffer';
+  const decodeSnapshot = createSnapshotDecoder();
   sock.onmessage = (ev) => {
     // 스냅샷은 바이너리 프레임(shared/codec.js), 나머지 메시지는 JSON 텍스트
-    const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : decodeSnapshot(ev.data);
+    if (ws !== sock) return;
+    let msg;
+    try {
+      msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : decodeSnapshot(ev.data);
+    } catch {
+      sock.close(4002, 'invalid server frame');
+      return;
+    }
     if (msg.t === 'snap') G.snapBytes.push({ at: performance.now(), bytes: ev.data.byteLength });
-    if (lagMs) setTimeout(() => handle(msg), lagMs / 2);
+    if (lagMs) setTimeout(() => { if (ws === sock) handle(msg); }, lagMs / 2);
     else handle(msg);
   };
   sock.onclose = (ev) => {

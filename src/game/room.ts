@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as sim from '../../shared/sim.js';
-import { encodeSnapshot, SNAP_ACK_OFFSET } from '../../shared/codec.js';
+import { encodeSnapshot, encodeSnapshotDelta, SNAP_ACK_OFFSET } from '../../shared/codec.js';
 import type { Repository } from '../db/types.ts';
 import { logger, errorFields } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
@@ -29,6 +29,7 @@ export interface Seat {
   disconnectedTick: number | null;
   /** 이 연결로 마지막에 보낸 오브 상태 버전 (-1 = 아직 안 보냄 → 다음 스냅샷에 반드시 싣는다) */
   sentOrbVersion: number;
+  sentSnapshotTick: number | null;
 }
 
 export interface MatchResultRow {
@@ -84,6 +85,7 @@ export class Room {
   private botCount = 0;
   private opts: RoomOptions;
   private rand: () => number;
+  private snapshotBase: { tick: number; frame: Uint8Array } | null = null;
 
   private timer: NodeJS.Timeout | null = null;
   private lastTime = 0;
@@ -144,7 +146,7 @@ export class Room {
     } else {
       entity = this.world.spawn(conn.playerId, conn.nickname, false);
     }
-    this.seats.set(conn.playerId, { entity, input: new InputBuffer(), conn, bot: null, disconnectedTick: null, sentOrbVersion: -1 });
+    this.seats.set(conn.playerId, { entity, input: new InputBuffer(), conn, bot: null, disconnectedTick: null, sentOrbVersion: -1, sentSnapshotTick: null });
     conn.send(this.matchStartMessage(entity));
     this.broadcastRoster();
   }
@@ -152,7 +154,7 @@ export class Room {
   addBot(nickname: string) {
     this.botCount++;
     const entity = this.world.spawn(`bot:${this.botCount}`, nickname, true); // 룸 내부에서만 유일하면 됨 (결정성 유지)
-    this.seats.set(entity.playerId, { entity, input: new InputBuffer(), conn: null, bot: new BotBrain(this.rand), disconnectedTick: null, sentOrbVersion: -1 });
+    this.seats.set(entity.playerId, { entity, input: new InputBuffer(), conn: null, bot: new BotBrain(this.rand), disconnectedTick: null, sentOrbVersion: -1, sentSnapshotTick: null });
     this.broadcastRoster();
   }
 
@@ -163,6 +165,7 @@ export class Room {
     seat.conn = conn;
     seat.disconnectedTick = null;
     seat.sentOrbVersion = -1;
+    seat.sentSnapshotTick = null;
     seat.input.reset();
     conn.send(this.matchStartMessage(seat.entity));
     logger.info('player reconnected', { roomId: this.id, playerId });
@@ -294,14 +297,17 @@ export class Room {
 
   /**
    * 스냅샷은 바이너리 프레임(shared/codec.js)으로 보낸다.
-   * - 공통 본문은 "오브 포함/미포함" 두 가지만 필요할 때 한 번씩 인코딩하고, 플레이어별로는 복사 후 ack 4바이트만 덮어쓴다
-   * - 오브 목록은 그 연결이 마지막으로 받은 버전과 다를 때만 싣는다(델타). WebSocket(TCP)은 순서를 보장하고,
-   *   혼잡으로 건너뛴 스냅샷은 sentOrbVersion 을 올리지 않으므로 다음에 다시 실린다 → 클라이언트 상태가 어긋나지 않는다
+   * - 플레이어·탄환 델타는 직전 틱의 스냅샷을 보낸 연결에만 보낸다. 혼잡으로 건너뛰면 전체 프레임으로 복구한다.
+   * - 오브 목록은 버전이 달라졌을 때 싣고, 플레이어별로는 공통 프레임을 복사한 뒤 입력 ack만 덮어쓴다.
    */
   private broadcastSnapshot() {
     const snap = this.world.snapshot(this.remainingTicks);
+    const base = this.snapshotBase;
+    const withoutOrbs = encodeSnapshot(snap, 0, false);
+    this.snapshotBase = { tick: snap.tick, frame: withoutOrbs };
     let withOrbs: Uint8Array | null = null;
-    let withoutOrbs: Uint8Array | null = null;
+    let deltaWithOrbs: Uint8Array | null | undefined;
+    let deltaWithoutOrbs: Uint8Array | null | undefined;
     for (const seat of this.seats.values()) {
       const conn = seat.conn;
       if (!conn) continue;
@@ -310,12 +316,24 @@ export class Room {
         continue;
       }
       const sendOrbs = seat.sentOrbVersion !== snap.ov;
-      const body = sendOrbs ? (withOrbs ??= encodeSnapshot(snap, 0, true)) : (withoutOrbs ??= encodeSnapshot(snap, 0, false));
+      const full = sendOrbs ? (withOrbs ??= encodeSnapshot(snap, 0, true)) : withoutOrbs;
+      let delta: Uint8Array | null = null;
+      if (base && seat.sentSnapshotTick === base.tick) {
+        if (sendOrbs) {
+          if (deltaWithOrbs === undefined) deltaWithOrbs = encodeSnapshotDelta(full, base.frame);
+          delta = deltaWithOrbs;
+        } else {
+          if (deltaWithoutOrbs === undefined) deltaWithoutOrbs = encodeSnapshotDelta(full, base.frame);
+          delta = deltaWithoutOrbs;
+        }
+      }
+      const body = delta ?? full;
       const frame = Buffer.allocUnsafe(body.byteLength);
       frame.set(body);
       frame.writeUInt32LE(seat.input.lastProcessedSeq >>> 0, SNAP_ACK_OFFSET);
       conn.send(frame);
       seat.sentOrbVersion = snap.ov;
+      seat.sentSnapshotTick = snap.tick;
       metrics.inc('net_snapshots_sent_total');
       metrics.inc('net_snapshot_bytes_total', frame.byteLength);
     }

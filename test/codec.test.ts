@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeSnapshot, encodeSnapshot, SNAP_ACK_OFFSET } from '../shared/codec.js';
+import { createSnapshotDecoder, decodeSnapshot, encodeSnapshot, encodeSnapshotDelta, MSG_SNAPSHOT, MSG_SNAPSHOT_DELTA, SNAP_ACK_OFFSET } from '../shared/codec.js';
 import { Room } from '../src/game/room.ts';
 import type { PlayerConnection } from '../src/game/types.ts';
 
@@ -9,7 +9,8 @@ process.env.LOG_LEVEL ??= 'silent';
 class FakeConn implements PlayerConnection {
   readonly playerId: string;
   readonly nickname: string;
-  snaps: Array<{ ack: number; bytes: number; d: any }> = [];
+  snaps: Array<{ ack: number; bytes: number; kind: number; d: any }> = [];
+  private decodeSnapshot = createSnapshotDecoder();
   congested = false;
   constructor(playerId: string) {
     this.playerId = playerId;
@@ -17,8 +18,8 @@ class FakeConn implements PlayerConnection {
   }
   send(data: string | Uint8Array) {
     if (typeof data === 'string') return;
-    const m = decodeSnapshot(data);
-    this.snaps.push({ ack: m.ack, bytes: data.byteLength, d: m.d });
+    const m = this.decodeSnapshot(data);
+    this.snaps.push({ ack: m.ack, bytes: data.byteLength, kind: data[0], d: m.d });
   }
   isCongested() {
     return this.congested;
@@ -124,6 +125,8 @@ test('오브 델타: 첫 스냅샷·오브 변화·재접속·혼잡으로 건�
   room.step();
   room.step();
   assert.ok(a.snaps[0].d.o, '첫 스냅샷에는 오브 포함');
+  assert.equal(a.snaps[0].kind, MSG_SNAPSHOT);
+  assert.equal(a.snaps[1].kind, MSG_SNAPSHOT_DELTA);
   assert.equal(a.snaps[1].d.o, undefined, '변화가 없으면 생략');
   assert.ok(a.snaps[1].bytes < a.snaps[0].bytes);
 
@@ -150,6 +153,7 @@ test('오브 델타: 첫 스냅샷·오브 변화·재접속·혼잡으로 건�
   a.congested = false;
   room.step();
   assert.ok(a.snaps.at(-1)!.d.o, '혼잡 해소 후 첫 스냅샷에 오브 포함');
+  assert.equal(a.snaps.at(-1)!.kind, MSG_SNAPSHOT);
   room.step();
   assert.equal(a.snaps.at(-1)!.d.o, undefined);
 
@@ -159,4 +163,24 @@ test('오브 델타: 첫 스냅샷·오브 변화·재접속·혼잡으로 건�
   room.rebind('a', a2);
   room.step();
   assert.ok(a2.snaps[0].d.o, '재접속 직후 오브 포함');
+  assert.equal(a2.snaps[0].kind, MSG_SNAPSHOT);
+});
+
+test('플레이어·탄환 델타는 현재 ack·좌표·이벤트·오브를 복원하고 잘못된 기준 틱을 거부한다', () => {
+  const state = sample();
+  const base = encodeSnapshot(state, 20, false);
+  state.tick++;
+  state.p[0][1] += 4;
+  state.b[1][2] += 16;
+  const full = encodeSnapshot(state, 21, true);
+  const delta = encodeSnapshotDelta(full, base)!;
+  assert.ok(delta.length < full.length);
+  const read = createSnapshotDecoder();
+  assert.throws(() => read(delta), /baseline/);
+  read(base);
+  assert.throws(() => read(delta.subarray(0, delta.length - 1)));
+  assert.deepEqual(read(delta), decodeSnapshot(full));
+  assert.throws(() => read(delta), /baseline mismatch/);
+  state.b.pop();
+  assert.equal(encodeSnapshotDelta(encodeSnapshot(state, 22, false), base), null);
 });

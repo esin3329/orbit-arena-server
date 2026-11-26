@@ -1,8 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '../shared/sim.js';
-import { decodeSnapshot } from '../shared/codec.js';
+import { createSnapshotDecoder } from '../shared/codec.js';
 import { createApp, type App } from '../src/app.ts';
 
 process.env.LOG_LEVEL ??= 'silent';
@@ -32,19 +33,34 @@ async function guest(nickname: string) {
   return (await res.json()) as { token: string; player: { id: string } };
 }
 
+const messageStreams = new WeakMap<WebSocket, EventEmitter>();
+
 /** 특정 타입 메시지가 올 때까지 대기 */
 function waitFor(ws: WebSocket, type: string, timeoutMs = 5000): Promise<any> {
+  let stream = messageStreams.get(ws);
+  if (!stream) {
+    const messages = new EventEmitter();
+    const decodeSnapshot = createSnapshotDecoder();
+    ws.on('message', (data, isBinary) => {
+      const msg = isBinary ? decodeSnapshot(data as Buffer) : JSON.parse(data.toString());
+      messages.emit('message', msg);
+    });
+    messageStreams.set(ws, messages);
+    stream = messages;
+  }
+  const messages = stream;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${type}`)), timeoutMs);
-    const onMsg = (data: WebSocket.RawData, isBinary: boolean) => {
-      const m = isBinary ? decodeSnapshot(data as Buffer) : JSON.parse(data.toString());
-      if (m.t === type) {
-        clearTimeout(timer);
-        ws.off('message', onMsg);
-        resolve(m);
-      }
+    const onMsg = (msg: { t: string }) => {
+      if (msg.t !== type) return;
+      clearTimeout(timer);
+      messages.off('message', onMsg);
+      resolve(msg);
     };
-    ws.on('message', onMsg);
+    const timer = setTimeout(() => {
+      messages.off('message', onMsg);
+      reject(new Error(`timeout waiting for ${type}`));
+    }, timeoutMs);
+    messages.on('message', onMsg);
   });
 }
 
