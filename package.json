@@ -1,6 +1,7 @@
 {
   "name": "orbit-arena-server",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "서버 권위형(authoritative) 실시간 멀티플레이 게임 웹 서버 포트폴리오 — Node.js + WebSocket + SQLite/Supabase",
   "type": "module",
   "private": true,
