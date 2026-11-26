@@ -6,6 +6,7 @@
  */
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '../shared/sim.js';
+import { decodeSnapshot } from '../shared/codec.js';
 
 const N = Number(process.argv[2] ?? 64);
 const SECONDS = Number(process.argv[3] ?? 20);
@@ -35,10 +36,10 @@ async function bot(i: number) {
   const timers: NodeJS.Timeout[] = [];
 
   ws.on('open', () => ws.send(JSON.stringify({ t: 'queue' })));
-  ws.on('message', (raw) => {
-    const data = raw.toString();
-    bytes += data.length;
-    const m = JSON.parse(data);
+  ws.on('message', (raw, isBinary) => {
+    const buf = raw as Buffer;
+    bytes += buf.byteLength;
+    const m = isBinary ? decodeSnapshot(buf) : JSON.parse(buf.toString());
     if (m.t === 'match_start') {
       started++;
       const t0 = performance.now();

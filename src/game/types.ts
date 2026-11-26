@@ -5,7 +5,8 @@
 export interface PlayerConnection {
   readonly playerId: string;
   readonly nickname: string;
-  send(data: string): void;
+  /** 문자열은 JSON 텍스트 프레임, 바이트 배열은 바이너리 프레임(스냅샷)으로 전송 */
+  send(data: string | Uint8Array): void;
   /** 송신 버퍼가 밀려 있으면 true → 해당 클라이언트의 스냅샷을 건너뛴다(느린 소비자 보호) */
   isCongested(): boolean;
 }

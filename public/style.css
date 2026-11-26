@@ -10,7 +10,7 @@
   --good: #34d399;
   --bad: #f87171;
   --warn: #fbbf24;
-  font-family: 'Pretendard', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Pretendard Variable', 'Pretendard', 'Segoe UI', system-ui, -apple-system, sans-serif;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }

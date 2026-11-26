@@ -9,6 +9,7 @@
  *  - 서버와 "같은" shared/sim.js 를 import 해서 예측 결과가 서버와 일치
  */
 import * as sim from '/shared/sim.js';
+import { decodeSnapshot } from '/shared/codec.js';
 
 const INTERP_DELAY_MS = 110;
 const MAX_SNAPS = 40;
@@ -32,6 +33,10 @@ const G = {
   you: 0,
   /** @type {Map<number, {nick: string, bot: boolean}>} */ roster: new Map(),
   /** @type {any[]} */ snaps: [],
+  /** 서버는 오브가 바뀔 때만 목록을 보낸다(델타) → 마지막으로 받은 목록을 유지 */
+  /** @type {number[][]} */ orbs: [],
+  /** 최근 1초간 받은 스냅샷 바이트 (HUD 표시용) */
+  /** @type {{at: number, bytes: number}[]} */ snapBytes: [],
   /** @type {any[]} */ pending: [],
   seq: 0,
   /** @type {any} */ pred: null,
@@ -174,9 +179,13 @@ function connect() {
     reconnectDelay = 500;
     setBadge(true);
   };
+  sock.binaryType = 'arraybuffer';
   sock.onmessage = (ev) => {
-    if (lagMs) setTimeout(() => handle(JSON.parse(ev.data)), lagMs / 2);
-    else handle(JSON.parse(ev.data));
+    // 스냅샷은 바이너리 프레임(shared/codec.js), 나머지 메시지는 JSON 텍스트
+    const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : decodeSnapshot(ev.data);
+    if (msg.t === 'snap') G.snapBytes.push({ at: performance.now(), bytes: ev.data.byteLength });
+    if (lagMs) setTimeout(() => handle(msg), lagMs / 2);
+    else handle(msg);
   };
   sock.onclose = (ev) => {
     if (ws !== sock) return;
@@ -279,6 +288,7 @@ function enterGame(/** @type {any} */ msg) {
     you: msg.you,
     roster: new Map(msg.roster.map((/** @type {any[]} */ r) => [r[0], { nick: r[1], bot: !!r[2] }])),
     snaps: [],
+    orbs: [],
     pending: [],
     pred: null,
     serverMe: null,
@@ -393,7 +403,8 @@ function onSnapshot(/** @type {any} */ msg) {
     players.set(p[0], { eid: p[0], x: p[1], y: p[2], hp: p[3], alive: !!p[4], score: p[5], aim: p[6], dashTicks: p[7], dashCd: p[8], kills: p[9], deaths: p[10] });
   }
   const bullets = new Map(d.b.map((/** @type {number[]} */ b) => [b[0], { x: b[1], y: b[2] }]));
-  G.snaps.push({ tick: d.tick, players, bullets, orbs: d.o });
+  if (d.o) G.orbs = d.o;
+  G.snaps.push({ tick: d.tick, players, bullets, orbs: G.orbs });
   if (G.snaps.length > MAX_SNAPS) G.snaps.shift();
   G.remTicks = d.rem;
   G.snapTimes.push(now);
@@ -687,9 +698,11 @@ function renderHud(/** @type {number} */ now) {
   }
   G.feed = G.feed.filter((f) => now - f.at < 5000);
   $('killfeed').innerHTML = G.feed.map((f) => `<li>${esc(f.text)}</li>`).join('');
+  while (G.snapBytes.length && now - G.snapBytes[0].at > 1000) G.snapBytes.shift();
+  const downBytes = G.snapBytes.reduce((s, b) => s + b.bytes, 0);
   $('netinfo').textContent = [
     `RTT        ${rtt.toFixed(0)} ms${lagMs ? ` (+${lagMs} 시뮬)` : ''}`,
-    `스냅샷     ${G.snapTimes.length} Hz`,
+    `스냅샷     ${G.snapTimes.length} Hz · ${(downBytes / 1024).toFixed(1)} KB/s`,
     `미확인 입력 ${G.pending.length}`,
     `보정 오차   ${G.reconErr.toFixed(2)} px`,
     `FPS        ${fps.toFixed(0)}`,

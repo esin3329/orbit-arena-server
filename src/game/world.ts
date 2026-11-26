@@ -50,7 +50,6 @@ export type GameEvent =
   | { k: 'kill'; by: number; v: number }
   | { k: 'orb'; by: number };
 
-const r2 = (v: number) => Math.round(v * 100) / 100;
 const BULLET_HIT_RADIUS = sim.PLAYER_RADIUS + sim.BULLET_RADIUS;
 
 /**
@@ -70,6 +69,8 @@ export class GameWorld {
   private history: Array<HistoryFrame | undefined> = new Array(sim.LAG_COMP_MAX_TICKS + 2);
   private nextEid = 1;
   private nextBulletId = 1;
+  /** 오브 활성/위치가 바뀔 때마다 증가 (스냅샷 델타용) */
+  private orbVersion = 0;
   private rand: Rng;
 
   constructor(rand: Rng) {
@@ -267,6 +268,7 @@ export class GameWorld {
           o.x = p.x;
           o.y = p.y;
           o.active = true;
+          this.orbVersion++;
         }
         continue;
       }
@@ -277,6 +279,7 @@ export class GameWorld {
         if (dx * dx + dy * dy <= pickR2) {
           e.score += sim.ORB_SCORE;
           o.active = false;
+          this.orbVersion++;
           o.respawnTick = this.tick + 60 + Math.floor(this.rand() * 90);
           this.events.push({ k: 'orb', by: e.eid });
           break;
@@ -303,18 +306,22 @@ export class GameWorld {
     return ev;
   }
 
-  /** 모든 플레이어에게 공통인 스냅샷 본문 (좌표는 소수 2자리로 양자화해 대역폭 절감) */
+  /**
+   * 모든 플레이어에게 공통인 스냅샷 본문. 양자화는 와이어 코덱(shared/codec.js)이 맡는다.
+   * `ov` 는 오브 상태 버전 — 룸이 클라이언트별로 마지막에 보낸 버전과 비교해 오브 목록을 실을지 정한다.
+   */
   snapshot(remainingTicks: number) {
     const p: number[][] = [];
     for (const e of this.entities.values()) {
-      p.push([e.eid, r2(e.x), r2(e.y), e.hp, e.alive ? 1 : 0, e.score, r2(e.aim), e.dashTicks, e.dashCd, e.kills, e.deaths]);
+      p.push([e.eid, e.x, e.y, e.hp, e.alive ? 1 : 0, e.score, e.aim, e.dashTicks, e.dashCd, e.kills, e.deaths]);
     }
     return {
       tick: this.tick,
       rem: remainingTicks,
       p,
-      b: this.bullets.map((b) => [b.id, r2(b.x), r2(b.y)]),
+      b: this.bullets.map((b) => [b.id, b.x, b.y]),
       o: this.orbs.filter((o) => o.active).map((o) => [o.id, Math.round(o.x), Math.round(o.y)]),
+      ov: this.orbVersion,
       ev: this.takeEvents(),
     };
   }

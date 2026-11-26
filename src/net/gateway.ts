@@ -31,7 +31,7 @@ export class WsConnection implements PlayerConnection {
     this.nickname = payload.nick;
   }
 
-  send(data: string) {
+  send(data: string | Uint8Array) {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(data);
   }
 
