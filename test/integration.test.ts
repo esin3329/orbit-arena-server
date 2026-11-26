@@ -1,6 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '../shared/sim.js';
 import { createSnapshotDecoder } from '../shared/codec.js';
@@ -15,6 +18,7 @@ let wsBase: string;
 before(async () => {
   app = await createApp({
     sqlitePath: ':memory:',
+    roomWorkers: 0,
     tokenSecret: 'test-secret',
     match: { botFillAfterMs: 200, durationSec: 2, botFillTo: 3 },
   });
@@ -131,4 +135,70 @@ test('WS: 프로토콜 버전이 다르면 426 거부, /health 에 서버 버전
   assert.equal(status, 426);
   const health = await (await fetch(`${base}/health`)).json();
   assert.equal(health.protocolVersion, PROTOCOL_VERSION);
+});
+
+test('룸 워커 2개: 서로 다른 룸을 처리하고 재접속과 결과 저장을 유지한다', { timeout: 15000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'orbit-arena-room-workers-'));
+  const sockets: WebSocket[] = [];
+  let arena: App | undefined;
+  try {
+    arena = await createApp({
+      sqlitePath: join(dir, 'game.db'),
+      tokenSecret: 'room-worker-test-secret',
+      roomWorkers: 2,
+      match: { maxPlayers: 2, botFillTo: 2, botFillAfterMs: 3000, durationSec: 4 },
+    });
+    const port = await arena.listen(0, '127.0.0.1');
+    const origin = `http://127.0.0.1:${port}`;
+
+    async function open(token: string) {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?v=${PROTOCOL_VERSION}&token=${token}`);
+      sockets.push(ws);
+      await waitFor(ws, 'welcome');
+      return ws;
+    }
+
+    const guests = await Promise.all(['WorkerA', 'WorkerB', 'WorkerC', 'WorkerD'].map(async (nickname) => {
+      const res = await fetch(origin + '/api/auth/guest', { method: 'POST', body: JSON.stringify({ nickname }) });
+      assert.equal(res.status, 201);
+      return (await res.json()) as { token: string; player: { id: string } };
+    }));
+    const clients = await Promise.all(guests.map(({ token }) => open(token)));
+    async function queuePair(first: WebSocket, second: WebSocket) {
+      const starts = [waitFor(first, 'match_start'), waitFor(second, 'match_start')];
+      for (const ws of [first, second]) ws.send(JSON.stringify({ t: 'queue' }));
+      return await Promise.all(starts);
+    }
+    const [a, b] = await queuePair(clients[0], clients[1]);
+    const [c, d] = await queuePair(clients[2], clients[3]);
+    assert.equal(a.roomId, b.roomId);
+    assert.equal(c.roomId, d.roomId);
+    assert.notEqual(a.roomId, c.roomId);
+    const metrics = await (await fetch(origin + '/metrics')).text();
+    assert.match(metrics, /^game_room_workers_ready 2$/m);
+    assert.match(metrics, /^game_room_workers_active 2$/m);
+
+    const closed = new Promise<void>((resolve) => clients[0].once('close', () => resolve()));
+    clients[0].close();
+    await closed;
+    const reconnect = new WebSocket(`ws://127.0.0.1:${port}/ws?v=${PROTOCOL_VERSION}&token=${guests[0].token}`);
+    sockets.push(reconnect);
+    const rejoined = await waitFor(reconnect, 'match_start');
+    assert.equal(rejoined.roomId, a.roomId);
+    assert.equal(rejoined.you, a.you);
+    const snap = await waitFor(reconnect, 'snap');
+    assert.ok(Array.isArray(snap.d.o), '재접속 직후 전체 스냅샷');
+    const ends = await Promise.all([waitFor(reconnect, 'match_end'), waitFor(clients[2], 'match_end')]);
+    assert.ok(ends.every((end) => end.reason === 'time' && end.results.length === 2));
+    for (const { player } of guests) {
+      assert.equal((await arena.repo.getPlayer(player.id))?.games, 1);
+    }
+  } finally {
+    for (const ws of sockets) ws.terminate();
+    await arena?.close();
+    for (const file of ['game.db', 'game.db-shm', 'game.db-wal']) {
+      await rm(join(dir, file), { force: true });
+    }
+    await rmdir(dir);
+  }
 });

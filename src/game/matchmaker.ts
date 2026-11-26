@@ -3,7 +3,7 @@ import type { Repository } from '../db/types.ts';
 import { TICK_RATE } from '../../shared/sim.js';
 import { logger } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
-import { Room } from './room.ts';
+import { Room, type RoomOptions } from './room.ts';
 import type { PlayerConnection } from './types.ts';
 
 const BOT_NAMES = ['Bot Nova', 'Bot Pixel', 'Bot Quark', 'Bot Ember', 'Bot Drift', 'Bot Volt', 'Bot Echo', 'Bot Flux'];
@@ -13,6 +13,10 @@ interface QueueEntry {
   since: number;
 }
 
+export type MatchRoom = Pick<Room, 'id' | 'state' | 'humanCount' | 'hasPlayer' | 'canAccept' | 'addPlayer' |
+  'addBot' | 'rebind' | 'detach' | 'removePlayer' | 'pushInput' | 'start'> & { end(reason: 'shutdown'): Promise<unknown> };
+export type CreateRoom = (options: RoomOptions, onEnd: (room: MatchRoom) => void) => MatchRoom;
+
 /**
  * 매치메이커 — 대기열과 룸 수명주기를 관리한다.
  *  1) 진행 중이고 자리가 남은 룸이 있으면 난입(late join)
@@ -20,18 +24,22 @@ interface QueueEntry {
  *  3) 최장 대기자가 botFillAfterMs 이상 기다렸으면 현재 인원 + 봇으로 시작
  */
 export class Matchmaker {
-  readonly rooms = new Map<string, Room>();
+  readonly rooms = new Map<string, MatchRoom>();
   private queue: QueueEntry[] = [];
-  private byPlayer = new Map<string, Room>();
+  private byPlayer = new Map<string, MatchRoom>();
   private timer: NodeJS.Timeout | null = null;
+  private closing = false;
   private repo: Repository | null;
   private cfg: MatchConfig;
   private snapshotEvery: number;
+  private readonly makeRoom: CreateRoom;
 
-  constructor(repo: Repository | null, cfg: MatchConfig, snapshotEvery = 2) {
+  constructor(repo: Repository | null, cfg: MatchConfig, snapshotEvery = 2,
+    makeRoom: CreateRoom = (opts, onEnd) => new Room({ ...opts, onEnd })) {
     this.repo = repo;
     this.cfg = cfg;
     this.snapshotEvery = snapshotEvery;
+    this.makeRoom = makeRoom;
   }
 
   start(intervalMs = 250) {
@@ -48,12 +56,16 @@ export class Matchmaker {
     return n;
   }
 
-  roomOf(playerId: string): Room | undefined {
+  roomOf(playerId: string): MatchRoom | undefined {
     const room = this.byPlayer.get(playerId);
     return room && room.state === 'playing' && room.hasPlayer(playerId) ? room : undefined;
   }
 
   enqueue(conn: PlayerConnection) {
+    if (this.closing) {
+      conn.send(JSON.stringify({ t: 'error', code: 'server_shutting_down' }));
+      return;
+    }
     if (this.roomOf(conn.playerId)) {
       conn.send(JSON.stringify({ t: 'error', code: 'already_in_match' }));
       return;
@@ -92,7 +104,7 @@ export class Matchmaker {
 
     // 1) 난입
     for (let i = 0; i < this.queue.length; ) {
-      let open: Room | undefined;
+      let open: MatchRoom | undefined;
       for (const r of this.rooms.values()) if (r.canAccept(minRemaining)) open = r;
       if (!open) break;
       const { conn } = this.queue.splice(i, 1)[0];
@@ -114,14 +126,13 @@ export class Matchmaker {
   }
 
   private createRoom(batch: QueueEntry[], bots: number) {
-    const room = new Room({
+    const room = this.makeRoom({
       durationTicks: this.cfg.durationSec * TICK_RATE,
       maxPlayers: this.cfg.maxPlayers,
       reconnectGraceTicks: Math.round((this.cfg.reconnectGraceMs / 1000) * TICK_RATE),
       snapshotEvery: this.snapshotEvery,
       repo: this.repo,
-      onEnd: (r) => this.onRoomEnd(r),
-    });
+    }, (r) => this.onRoomEnd(r));
     this.rooms.set(room.id, room);
     // 봇을 먼저 넣어야 사람에게 가는 match_start 에 완성된 로스터가 담긴다
     for (let i = 0; i < bots; i++) room.addBot(BOT_NAMES[i % BOT_NAMES.length]);
@@ -136,13 +147,14 @@ export class Matchmaker {
     return room;
   }
 
-  private onRoomEnd(room: Room) {
+  private onRoomEnd(room: MatchRoom) {
     this.rooms.delete(room.id);
     for (const [pid, r] of this.byPlayer) if (r === room) this.byPlayer.delete(pid);
   }
 
   /** 서버 종료 시 진행 중인 매치를 모두 마무리(결과 저장)한 뒤 멈춘다 */
   async shutdown() {
+    this.closing = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await Promise.all([...this.rooms.values()].map((r) => r.end('shutdown')));

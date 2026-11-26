@@ -4,6 +4,7 @@ import { config as baseConfig, validateConfig, type Config, type MatchConfig } f
 import { createRepository } from './db/index.ts';
 import type { Repository } from './db/types.ts';
 import { Matchmaker } from './game/matchmaker.ts';
+import { RoomPool } from './game/room-pool.ts';
 import { createHttpHandler } from './http/api.ts';
 import { attachGateway } from './net/gateway.ts';
 import { metrics } from './util/metrics.ts';
@@ -28,7 +29,16 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
   const github = cfg.githubAuthOrigin && cfg.supabaseUrl && cfg.supabasePublishableKey && 'getOrCreateGitHubPlayer' in repo
     ? { ...createGitHubAuth(cfg.supabaseUrl, cfg.supabasePublishableKey, cfg.githubAuthOrigin), getPlayer: repo.getOrCreateGitHubPlayer.bind(repo) }
     : undefined;
-  const matchmaker = new Matchmaker(repo, cfg.match, cfg.snapshotEvery);
+  const pool = cfg.roomWorkers ? new RoomPool(cfg.roomWorkers, {
+    dbDriver: cfg.dbDriver, sqlitePath: cfg.sqlitePath, supabaseUrl: cfg.supabaseUrl, supabaseKey: cfg.supabaseKey,
+  }) : undefined;
+  try {
+    await pool?.start();
+  } catch (err) {
+    await repo.close();
+    throw err;
+  }
+  const matchmaker = new Matchmaker(repo, cfg.match, cfg.snapshotEvery, pool?.create);
 
   let onlineCount = () => 0;
   const server = createServer(
@@ -51,6 +61,8 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
   metrics.gauge('players_online', () => gateway.sessions.size);
   metrics.gauge('rooms_active', () => matchmaker.rooms.size);
   metrics.gauge('matchmaking_queue_size', () => matchmaker.queueSize);
+  metrics.gauge('game_room_workers_ready', () => pool?.readyCount ?? 0);
+  metrics.gauge('game_room_workers_active', () => pool?.activeCount ?? 0);
 
   matchmaker.start();
 
@@ -65,6 +77,7 @@ export async function createApp(overrides: AppOverrides = {}): Promise<App> {
     },
     async close() {
       await matchmaker.shutdown(); // 진행 중 매치 결과를 먼저 저장
+      await pool?.close();
       gateway.close();
       server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
