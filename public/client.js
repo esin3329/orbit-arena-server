@@ -10,7 +10,6 @@
  */
 import * as sim from '/shared/sim.js';
 import { decodeSnapshot } from '/shared/codec.js';
-import * as sfx from '/sfx.js';
 
 const INTERP_DELAY_MS = 110;
 const MAX_SNAPS = 40;
@@ -39,10 +38,6 @@ const G = {
   /** 최근 1초간 받은 스냅샷 바이트 (HUD 표시용) */
   /** @type {{at: number, bytes: number}[]} */ snapBytes: [],
   /** @type {any[]} */ pending: [],
-  /** 로컬 사격 쿨다운(틱) — 서버 판정을 기다리지 않고 즉시 사격음을 내기 위한 예측 */
-  fireCd: 0,
-  /** 직전 스냅샷의 탄환 ID — 새로 생긴 탄환으로 다른 플레이어의 사격음을 낸다 */
-  /** @type {Set<number> | null} */ seenBullets: null,
   seq: 0,
   /** @type {any} */ pred: null,
   /** @type {any} */ serverMe: null,
@@ -295,8 +290,6 @@ function enterGame(/** @type {any} */ msg) {
     snaps: [],
     orbs: [],
     pending: [],
-    fireCd: 0,
-    seenBullets: null,
     pred: null,
     serverMe: null,
     offset: null,
@@ -309,7 +302,6 @@ function enterGame(/** @type {any} */ msg) {
   $('game').hidden = false;
   $('result').hidden = true;
   resize();
-  sfx.matchStart();
 }
 
 function exitGame() {
@@ -330,7 +322,6 @@ function showResult(/** @type {any} */ msg) {
     )
     .join('');
   $('result').hidden = false;
-  sfx.matchEnd(mine?.placement === 1);
 }
 
 $('back-btn').addEventListener('click', exitGame);
@@ -367,28 +358,6 @@ canvas.addEventListener('mousemove', (e) => {
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// 브라우저 자동재생 정책: 첫 사용자 입력에서 오디오를 연다
-for (const type of ['pointerdown', 'keydown']) addEventListener(type, () => sfx.unlock(), { capture: true });
-const volInput = /** @type {HTMLInputElement} */ ($('sfx-vol'));
-const showVol = () => ($('sfx-vol-label').textContent = sfx.getVolume() > 0 ? `${Math.round(sfx.getVolume() * 100)}%` : '음소거');
-let volBeforeMute = sfx.getVolume() || 0.6;
-volInput.value = String(Math.round(sfx.getVolume() * 100));
-showVol();
-volInput.addEventListener('input', () => {
-  sfx.setVolume(Number(volInput.value) / 100);
-  showVol();
-});
-volInput.addEventListener('change', () => sfx.orb()); // 놓았을 때 미리듣기
-addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyM' || !G.active) return;
-  if (sfx.getVolume() > 0) {
-    volBeforeMute = sfx.getVolume();
-    sfx.setVolume(0);
-  } else sfx.setVolume(volBeforeMute);
-  volInput.value = String(Math.round(sfx.getVolume() * 100));
-  showVol();
-});
-
 $('lag').addEventListener('change', (/** @type {any} */ e) => (lagMs = Number(e.target.value)));
 $('opt-predict').addEventListener('change', (/** @type {any} */ e) => (opts.predict = e.target.checked));
 $('opt-interp').addEventListener('change', (/** @type {any} */ e) => (opts.interp = e.target.checked));
@@ -412,14 +381,7 @@ function inputTick() {
   // 지연 보상: 지금 화면에 그리고 있는 서버 틱을 함께 보내면, 서버가 그 시점으로 되감아 탄 판정을 한다
   const rt = opts.lagcomp ? viewTick() : null;
   send(rt === null ? { t: 'input', ...input } : { t: 'input', ...input, rt: Math.round(rt * 100) / 100 });
-  const dashBefore = G.pred.dashTicks;
   if (G.pred.alive) sim.stepMovement(G.pred, input);
-  if (G.pred.dashTicks > dashBefore) sfx.dash();
-  if (G.fireCd > 0) G.fireCd--;
-  if (input.fire && G.pred.alive && G.fireCd === 0) {
-    G.fireCd = sim.FIRE_COOLDOWN_TICKS;
-    sfx.shoot();
-  }
   G.pred.aim = input.aim;
   G.pending.push(input);
   if (G.pending.length > 90) G.pending.shift();
@@ -441,7 +403,6 @@ function onSnapshot(/** @type {any} */ msg) {
     players.set(p[0], { eid: p[0], x: p[1], y: p[2], hp: p[3], alive: !!p[4], score: p[5], aim: p[6], dashTicks: p[7], dashCd: p[8], kills: p[9], deaths: p[10] });
   }
   const bullets = new Map(d.b.map((/** @type {number[]} */ b) => [b[0], { x: b[1], y: b[2] }]));
-  playRemoteShots(bullets);
   if (d.o) G.orbs = d.o;
   G.snaps.push({ tick: d.tick, players, bullets, orbs: G.orbs });
   if (G.snaps.length > MAX_SNAPS) G.snaps.shift();
@@ -456,7 +417,6 @@ function onSnapshot(/** @type {any} */ msg) {
   if (!mine) return;
   G.serverMe = mine;
   G.pending = G.pending.filter((i) => i.seq > msg.ack);
-  if (G.pred && !G.pred.alive && mine.alive) sfx.respawn();
   const before = G.pred ? { x: G.pred.x, y: G.pred.y } : null;
   G.pred = { x: mine.x, y: mine.y, dashTicks: mine.dashTicks, dashCd: mine.dashCd, alive: mine.alive, hp: mine.hp, aim: G.pred?.aim ?? mine.aim };
   if (mine.alive) for (const i of G.pending) sim.stepMovement(G.pred, i);
@@ -476,43 +436,17 @@ function onSnapshot(/** @type {any} */ msg) {
   }
 }
 
-/**
- * 이번 스냅샷에 처음 나타난 탄환 = 누군가 방금 쏜 탄. 내 탄(이미 예측으로 소리를 냄)은 내 근처에서 생기므로 제외하고,
- * 나머지는 위치에 따라 감쇠·패닝해서 재생한다.
- * @param {Map<number, {x:number,y:number}>} bullets
- */
-function playRemoteShots(bullets) {
-  const seen = G.seenBullets;
-  G.seenBullets = new Set(bullets.keys());
-  if (!seen) return; // 입장 직후 첫 스냅샷: 이미 날아가던 탄은 소리 없이 기록만
-  const me = renderSelfPos();
-  for (const [id, b] of bullets) {
-    if (seen.has(id)) continue;
-    if (G.pred?.alive && Math.hypot(b.x - me.x, b.y - me.y) < sim.PLAYER_RADIUS + 70) continue;
-    const { att, pan } = sfx.spatial(me, b.x, b.y);
-    sfx.remoteShoot(att, pan);
-  }
-}
-
 function handleEvent(/** @type {any} */ ev, /** @type {Map<number, any>} */ players) {
   const name = (/** @type {number} */ eid) => G.roster.get(eid)?.nick ?? '???';
   if (ev.k === 'kill') {
     G.feed.push({ text: `${name(ev.by)} ⟶ ${name(ev.v)}`, at: performance.now() });
     if (G.feed.length > 5) G.feed.shift();
-    if (ev.v === G.you) sfx.death();
-    else if (ev.by === G.you) sfx.kill();
   } else if (ev.k === 'hit') {
     const p = players.get(ev.v);
     if (p) G.fx.push({ x: p.x, y: p.y, at: performance.now(), color: '#f87171' });
-    if (ev.v === G.you) sfx.hurt();
-    else if (p) {
-      const { att, pan } = sfx.spatial(renderSelfPos(), p.x, p.y);
-      sfx.hit(att, pan);
-    }
   } else if (ev.k === 'orb') {
     const p = players.get(ev.by);
     if (p) G.fx.push({ x: p.x, y: p.y, at: performance.now(), color: '#fbbf24' });
-    if (ev.by === G.you) sfx.orb();
   }
 }
 

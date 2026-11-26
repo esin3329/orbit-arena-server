@@ -83,9 +83,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .feed li { background: #0b1020cc; margin-top: 4px; padding: 3px 8px; border-radius: 6px; font-size: 13px; }
 #netinfo { margin: 0; padding: 8px 10px; background: #0b1020cc; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .net-ctl { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: #0b1020cc; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
-.net-ctl .vol { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
-.net-ctl .vol input { width: 90px; accent-color: var(--accent); }
-.net-ctl .vol span { min-width: 36px; color: var(--text); }
 .net-ctl select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; margin-left: 6px; }
 .center-msg { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); font-size: 22px; color: var(--warn); pointer-events: none; }
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: #0008; padding: 16px; }
