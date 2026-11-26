@@ -60,8 +60,14 @@ export class Metrics {
       `game_tick_duration_ms{quantile="0.99"} ${t.p99Ms}`,
       `game_tick_duration_ms_count ${t.total}`,
     );
-    const mem = process.memoryUsage();
-    lines.push('# TYPE process_heap_used_bytes gauge', `process_heap_used_bytes ${mem.heapUsed}`);
+    if (typeof process !== 'undefined' && typeof process.memoryUsage === 'function') {
+      try {
+        const mem = process.memoryUsage();
+        lines.push('# TYPE process_heap_used_bytes gauge', `process_heap_used_bytes ${mem.heapUsed}`);
+      } catch {
+        /* Workers 등 일부 런타임에서는 memoryUsage 미지원 */
+      }
+    }
     return lines.join('\n') + '\n';
   }
 }

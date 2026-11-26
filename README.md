@@ -1,9 +1,11 @@
 # Orbit Arena — 실시간 멀티플레이 게임 서버
 
 [![CI](https://github.com/esin3329/orbit-arena-server/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/esin3329/orbit-arena-server/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/demo-live-38bdf8?logo=cloudflare&logoColor=white)](https://orbit-arena-server.qlqlf2226.workers.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node.js 24](https://img.shields.io/badge/node-24-339933?logo=node.js&logoColor=white)
 
+> **Live Demo:** https://orbit-arena-server.qlqlf2226.workers.dev *(Cloudflare Workers + SQLite Durable Objects)*
 > **서버 권위형(authoritative) 실시간 게임 웹 서버** 포트폴리오
 > Node.js 24 · TypeScript · WebSocket · SQLite / Supabase(PostgreSQL)
 
@@ -179,6 +181,15 @@ npm start
 
 워커는 동일한 SQLite 파일 또는 Supabase 프로젝트를 사용합니다. `/metrics`에서 준비된 워커 수와 룸을 맡고 있는 워커 수를 확인할 수 있습니다.
 
+### Cloudflare Workers 배포
+
+`cloudflare/worker.ts`는 동일한 시뮬레이션(`shared/sim.js`)·코덱(`shared/codec.js`)·게임 룸(`Room`, `Matchmaker`)을 **Cloudflare Workers + SQLite Durable Objects(`ArenaDO`) + Workers Static Assets**로 구동합니다.
+
+```bash
+npx wrangler secret put TOKEN_SECRET   # 최초 1회 (32자 이상 랜덤 시크릿)
+npm run cf:deploy                      # 에셋 스테이징 + wrangler deploy
+```
+
 ---
 
 ## DB: SQLite ↔ Supabase
@@ -350,6 +361,9 @@ src/
   http/api.ts          REST API, GitHub OAuth 핸드오프, 프록시 IP·/metrics 보호, 정적 파일(CSP)
   util/                JSON 로거, 토큰 버킷, Prometheus 메트릭, 시드 RNG, 재시도
 public/                브라우저 클라이언트 (Canvas, 빌드 없음), 파비콘·OG 이미지
+cloudflare/worker.ts   Cloudflare Workers + SQLite Durable Object(ArenaDO) 엔트리포인트
+wrangler.jsonc         Cloudflare Workers / Durable Objects / Assets 배포 설정
+scripts/cf-stage-assets.ts  Workers 정적 에셋(public/ + shared/ + _headers) 스테이징 스크립트
 scripts/assets/        OG 이미지 원본 HTML + PNG 렌더러 (`node scripts/assets/render.ts`, 헤드리스 Chrome/Edge)
 supabase/migrations/   Postgres 스키마, RLS, record_match()(멱등·원자 Elo)·player_matches()·github_accounts
 supabase/config.toml   CI용 로컬 Supabase 스택 설정

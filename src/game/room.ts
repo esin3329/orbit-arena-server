@@ -334,9 +334,9 @@ export class Room {
         }
       }
       const body = delta ?? full;
-      const frame = Buffer.allocUnsafe(body.byteLength);
+      const frame = new Uint8Array(body.byteLength);
       frame.set(body);
-      frame.writeUInt32LE(seat.input.lastProcessedSeq >>> 0, SNAP_ACK_OFFSET);
+      new DataView(frame.buffer, frame.byteOffset, frame.byteLength).setUint32(SNAP_ACK_OFFSET, seat.input.lastProcessedSeq >>> 0, true);
       conn.send(frame);
       seat.sentOrbVersion = snap.ov;
       seat.sentSnapshotTick = snap.tick;
