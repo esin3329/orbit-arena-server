@@ -96,12 +96,14 @@ class SupabaseRepository implements Repository {
           rating_delta: deltas.get(p.playerId) ?? 0,
         })),
       }),
-    ) as { out_player_id: string; out_rating: number }[];
-    const after = new Map(rows.map((r) => [r.out_player_id, r.out_rating]));
+    ) as { out_player_id: string; out_rating: number; out_rating_delta: number }[];
+    // 재시도로 이미 기록된 매치였다면 함수가 "저장된" 변동값을 돌려준다 → 방금 계산한 값보다 이것을 신뢰
+    const saved = new Map(rows.map((r) => [r.out_player_id, r]));
 
     return input.participants.map((p) => {
-      const delta = deltas.get(p.playerId) ?? 0;
-      return { ...p, ratingDelta: delta, ratingAfter: after.get(p.playerId) ?? (ratingOf.get(p.playerId) ?? 1000) + delta };
+      const row = saved.get(p.playerId);
+      const delta = row?.out_rating_delta ?? deltas.get(p.playerId) ?? 0;
+      return { ...p, ratingDelta: delta, ratingAfter: row?.out_rating ?? (ratingOf.get(p.playerId) ?? 1000) + delta };
     });
   }
 
@@ -147,25 +149,17 @@ class SupabaseRepository implements Repository {
   }
 
   async playerMatches(playerId: string, limit: number): Promise<PlayerMatchRow[]> {
-    const rows = check(
-      await this.sb
-        .from('match_players')
-        .select('match_id, score, kills, deaths, placement, rating_delta, matches!inner(ended_at)')
-        .eq('player_id', playerId)
-        .order('ended_at', { ascending: false, referencedTable: 'matches' })
-        .limit(limit),
-    ) as any[];
-    return rows
-      .map((r) => ({
-        matchId: r.match_id,
-        endedAt: r.matches.ended_at,
-        score: r.score,
-        kills: r.kills,
-        deaths: r.deaths,
-        placement: r.placement,
-        ratingDelta: r.rating_delta,
-      }))
-      .sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+    // 정렬(매치 종료 시각) → limit 을 DB 함수 안에서 처리한다 (supabase/migrations/20261126000000_*.sql 참고)
+    const rows = check(await this.sb.rpc('player_matches', { p_player_id: playerId, p_limit: limit })) as any[];
+    return rows.map((r) => ({
+      matchId: r.match_id,
+      endedAt: r.ended_at,
+      score: r.score,
+      kills: r.kills,
+      deaths: r.deaths,
+      placement: r.placement,
+      ratingDelta: r.rating_delta,
+    }));
   }
 
   async ping(): Promise<boolean> {

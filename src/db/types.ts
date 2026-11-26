@@ -60,7 +60,10 @@ export interface Repository {
   readonly driver: string;
   createGuest(nickname: string): Promise<PlayerRecord>;
   getPlayer(id: string): Promise<PlayerRecord | null>;
-  /** 매치 결과 저장 + 플레이어 누적 스탯/레이팅 갱신을 하나의 트랜잭션으로 처리 */
+  /**
+   * 매치 결과 저장 + 플레이어 누적 스탯/레이팅 갱신을 하나의 트랜잭션으로 처리.
+   * matchId 기준 멱등: 같은 매치를 다시 기록하면 아무것도 반영하지 않고 저장된 결과를 돌려준다(재시도 안전).
+   */
   recordMatch(input: MatchRecordInput): Promise<MatchParticipantResult[]>;
   leaderboard(limit: number): Promise<PlayerRecord[]>;
   recentMatches(limit: number): Promise<MatchSummary[]>;

@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION } from '../shared/sim.js';
+import { decodeSnapshot } from '../shared/codec.js';
 import { createApp, type App } from '../src/app.ts';
 
 process.env.LOG_LEVEL ??= 'silent';
@@ -35,8 +36,8 @@ async function guest(nickname: string) {
 function waitFor(ws: WebSocket, type: string, timeoutMs = 5000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timeout waiting for ${type}`)), timeoutMs);
-    const onMsg = (data: WebSocket.RawData) => {
-      const m = JSON.parse(data.toString());
+    const onMsg = (data: WebSocket.RawData, isBinary: boolean) => {
+      const m = isBinary ? decodeSnapshot(data as Buffer) : JSON.parse(data.toString());
       if (m.t === type) {
         clearTimeout(timer);
         ws.off('message', onMsg);

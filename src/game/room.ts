@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as sim from '../../shared/sim.js';
+import { encodeSnapshot, SNAP_ACK_OFFSET } from '../../shared/codec.js';
 import type { Repository } from '../db/types.ts';
 import { logger, errorFields } from '../util/logger.ts';
 import { metrics } from '../util/metrics.ts';
@@ -26,6 +27,8 @@ export interface Seat {
   conn: PlayerConnection | null;
   bot: BotBrain | null;
   disconnectedTick: number | null;
+  /** 이 연결로 마지막에 보낸 오브 상태 버전 (-1 = 아직 안 보냄 → 다음 스냅샷에 반드시 싣는다) */
+  sentOrbVersion: number;
 }
 
 export interface MatchResultRow {
@@ -141,7 +144,7 @@ export class Room {
     } else {
       entity = this.world.spawn(conn.playerId, conn.nickname, false);
     }
-    this.seats.set(conn.playerId, { entity, input: new InputBuffer(), conn, bot: null, disconnectedTick: null });
+    this.seats.set(conn.playerId, { entity, input: new InputBuffer(), conn, bot: null, disconnectedTick: null, sentOrbVersion: -1 });
     conn.send(this.matchStartMessage(entity));
     this.broadcastRoster();
   }
@@ -149,7 +152,7 @@ export class Room {
   addBot(nickname: string) {
     this.botCount++;
     const entity = this.world.spawn(`bot:${this.botCount}`, nickname, true); // 룸 내부에서만 유일하면 됨 (결정성 유지)
-    this.seats.set(entity.playerId, { entity, input: new InputBuffer(), conn: null, bot: new BotBrain(this.rand), disconnectedTick: null });
+    this.seats.set(entity.playerId, { entity, input: new InputBuffer(), conn: null, bot: new BotBrain(this.rand), disconnectedTick: null, sentOrbVersion: -1 });
     this.broadcastRoster();
   }
 
@@ -159,6 +162,7 @@ export class Room {
     if (!seat || seat.entity.isBot) return false;
     seat.conn = conn;
     seat.disconnectedTick = null;
+    seat.sentOrbVersion = -1;
     seat.input.reset();
     conn.send(this.matchStartMessage(seat.entity));
     logger.info('player reconnected', { roomId: this.id, playerId });
@@ -289,11 +293,15 @@ export class Room {
   }
 
   /**
-   * 스냅샷은 모든 플레이어에게 공통인 본문을 한 번만 직렬화하고,
-   * 플레이어별로 다른 ack(마지막 처리 입력 seq) 부분만 문자열로 이어 붙인다 → 직렬화 O(1), 전송 O(N)
+   * 스냅샷은 바이너리 프레임(shared/codec.js)으로 보낸다.
+   * - 공통 본문은 "오브 포함/미포함" 두 가지만 필요할 때 한 번씩 인코딩하고, 플레이어별로는 복사 후 ack 4바이트만 덮어쓴다
+   * - 오브 목록은 그 연결이 마지막으로 받은 버전과 다를 때만 싣는다(델타). WebSocket(TCP)은 순서를 보장하고,
+   *   혼잡으로 건너뛴 스냅샷은 sentOrbVersion 을 올리지 않으므로 다음에 다시 실린다 → 클라이언트 상태가 어긋나지 않는다
    */
   private broadcastSnapshot() {
-    const body = JSON.stringify(this.world.snapshot(this.remainingTicks));
+    const snap = this.world.snapshot(this.remainingTicks);
+    let withOrbs: Uint8Array | null = null;
+    let withoutOrbs: Uint8Array | null = null;
     for (const seat of this.seats.values()) {
       const conn = seat.conn;
       if (!conn) continue;
@@ -301,8 +309,15 @@ export class Room {
         metrics.inc('net_snapshots_skipped_total');
         continue;
       }
-      conn.send(`{"t":"snap","ack":${seat.input.lastProcessedSeq},"d":${body}}`);
+      const sendOrbs = seat.sentOrbVersion !== snap.ov;
+      const body = sendOrbs ? (withOrbs ??= encodeSnapshot(snap, 0, true)) : (withoutOrbs ??= encodeSnapshot(snap, 0, false));
+      const frame = Buffer.allocUnsafe(body.byteLength);
+      frame.set(body);
+      frame.writeUInt32LE(seat.input.lastProcessedSeq >>> 0, SNAP_ACK_OFFSET);
+      conn.send(frame);
+      seat.sentOrbVersion = snap.ov;
       metrics.inc('net_snapshots_sent_total');
+      metrics.inc('net_snapshot_bytes_total', frame.byteLength);
     }
   }
 
@@ -329,7 +344,7 @@ export class Room {
     if (this.opts.repo && humans.length > 0) {
       const repo = this.opts.repo;
       try {
-        // matchId 가 PK 이므로 재시도는 멱등하다: 앞선 시도가 실제로는 커밋됐다면 중복 삽입이 실패할 뿐 이중 반영되지 않는다
+        // recordMatch 는 matchId 기준으로 멱등하다: 앞선 시도가 실제로는 커밋됐다면(응답 유실) 다시 반영하지 않고 저장된 결과를 돌려준다
         const saved = await retry(
           () =>
             repo.recordMatch({

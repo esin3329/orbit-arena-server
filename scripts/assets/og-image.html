@@ -1,0 +1,106 @@
+<!doctype html>
+<!--
+  링크 공유 미리보기 이미지(public/og-image.png, 1200×630)의 원본.
+  다시 만들기: node scripts/assets/render.ts
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+<style>
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #0b1020; }
+  body { font-family: 'Pretendard Variable', 'Malgun Gothic', sans-serif; color: #e6ebf5; position: relative; }
+  svg.bg { position: absolute; inset: 0; }
+  .text { position: absolute; left: 72px; top: 150px; width: 560px; }
+  h1 {
+    margin: 0; font-size: 96px; font-weight: 800; letter-spacing: -0.035em; line-height: 1;
+    background: linear-gradient(90deg, #38bdf8, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  p { margin: 22px 0 0; font-size: 30px; font-weight: 500; color: #c3cbe0; line-height: 1.35; letter-spacing: -0.01em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+  .chip { font-size: 20px; font-weight: 600; padding: 8px 16px; border-radius: 999px; border: 1.5px solid #2c3a63; background: #131a2ecc; color: #9fb0d6; }
+  .chip b { color: #38bdf8; font-weight: 700; }
+  .foot { position: absolute; left: 72px; bottom: 54px; font-size: 20px; color: #6b7699; font-weight: 500; letter-spacing: 0.02em; }
+</style>
+</head>
+<body>
+<svg class="bg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#1a2442" stroke-width="1" />
+    </pattern>
+    <radialGradient id="fade" cx="0.78" cy="0.5" r="0.75">
+      <stop offset="0" stop-color="#0b1020" stop-opacity="0" />
+      <stop offset="1" stop-color="#0b1020" stop-opacity="1" />
+    </radialGradient>
+    <linearGradient id="left" x1="0" x2="1">
+      <stop offset="0" stop-color="#0b1020" />
+      <stop offset="0.45" stop-color="#0b1020" stop-opacity="0.92" />
+      <stop offset="0.62" stop-color="#0b1020" stop-opacity="0" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6" /></filter>
+  </defs>
+
+  <!-- 아레나 -->
+  <rect x="560" y="40" width="600" height="550" rx="10" fill="#0d1428" stroke="#38bdf855" stroke-width="2" />
+  <rect x="560" y="40" width="600" height="550" fill="url(#grid)" />
+  <g fill="#1e2a4a" stroke="#38bdf833" stroke-width="2">
+    <rect x="690" y="130" width="34" height="150" rx="3" />
+    <rect x="880" y="285" width="130" height="56" rx="3" />
+    <rect x="1040" y="140" width="96" height="34" rx="3" />
+    <rect x="1060" y="400" width="34" height="140" rx="3" />
+    <rect x="640" y="450" width="130" height="34" rx="3" />
+  </g>
+
+  <!-- 오브 -->
+  <g>
+    <circle cx="800" cy="120" r="14" fill="#fbbf2433" /><circle cx="800" cy="120" r="7" fill="#fbbf24" />
+    <circle cx="960" cy="200" r="14" fill="#fbbf2433" /><circle cx="960" cy="200" r="7" fill="#fbbf24" />
+    <circle cx="1120" cy="300" r="14" fill="#fbbf2433" /><circle cx="1120" cy="300" r="7" fill="#fbbf24" />
+    <circle cx="860" cy="520" r="14" fill="#fbbf2433" /><circle cx="860" cy="520" r="7" fill="#fbbf24" />
+    <circle cx="990" cy="460" r="14" fill="#fbbf2433" /><circle cx="990" cy="460" r="7" fill="#fbbf24" />
+  </g>
+
+  <!-- 탄환 궤적 -->
+  <g stroke-linecap="round">
+    <line x1="826" y1="374" x2="930" y2="420" stroke="#38bdf8" stroke-width="3" opacity=".35" />
+    <circle cx="930" cy="420" r="5" fill="#e0f2fe" />
+    <line x1="1000" y1="220" x2="1060" y2="248" stroke="#f472b6" stroke-width="3" opacity=".35" />
+    <circle cx="1060" cy="248" r="5" fill="#fde7f3" />
+  </g>
+
+  <!-- 플레이어 -->
+  <g>
+    <circle cx="800" cy="360" r="30" fill="#38bdf8" opacity=".35" filter="url(#glow)" />
+    <circle cx="800" cy="360" r="20" fill="#38bdf8" stroke="#e0f2fe" stroke-width="3" />
+    <line x1="800" y1="360" x2="830" y2="374" stroke="#e0f2fe" stroke-width="5" stroke-linecap="round" />
+    <circle cx="1000" cy="440" r="20" fill="#f87171" />
+    <line x1="1000" y1="440" x2="972" y2="430" stroke="#fee2e2" stroke-width="5" stroke-linecap="round" />
+    <circle cx="975" cy="215" r="20" fill="#f472b6" />
+    <line x1="975" y1="215" x2="1003" y2="228" stroke="#fde7f3" stroke-width="5" stroke-linecap="round" />
+    <circle cx="1090" cy="250" r="20" fill="#34d399" />
+    <circle cx="880" cy="140" r="20" fill="#a78bfa" />
+    <!-- 대시 잔상 -->
+    <circle cx="852" cy="154" r="20" fill="#a78bfa" opacity=".22" />
+    <circle cx="826" cy="167" r="20" fill="#a78bfa" opacity=".1" />
+  </g>
+  <!-- 피격 이펙트 -->
+  <circle cx="1090" cy="250" r="30" fill="none" stroke="#f87171" stroke-width="3" opacity=".7" />
+
+  <rect width="1200" height="630" fill="url(#left)" />
+  <rect width="1200" height="630" fill="url(#fade)" opacity=".55" />
+</svg>
+
+<div class="text">
+  <h1>Orbit Arena</h1>
+  <p>서버 권위형 실시간 멀티플레이<br />아레나 슈터</p>
+  <div class="chips">
+    <span class="chip"><b>30Hz</b> 서버 틱</span>
+    <span class="chip">클라이언트 예측 · 보간</span>
+    <span class="chip">지연 보상</span>
+    <span class="chip">바이너리 스냅샷</span>
+  </div>
+</div>
+<div class="foot">Node.js · TypeScript · WebSocket · Supabase</div>
+</body>
+</html>

@@ -111,6 +111,19 @@ export class SqliteRepository implements Repository {
   async recordMatch(input: MatchRecordInput): Promise<MatchParticipantResult[]> {
     // 레이팅 읽기 → 계산 → 쓰기를 한 트랜잭션(BEGIN IMMEDIATE)에서 처리해 동시 매치 종료 시에도 일관성 보장
     return this.tx(() => {
+      // 멱등: 이미 기록된 매치(재시도)면 다시 반영하지 않고 저장된 결과를 돌려준다 (Supabase record_match 와 동일한 계약)
+      if (this.db.prepare('SELECT 1 FROM matches WHERE id = ?').get(input.matchId)) {
+        const saved = this.db.prepare(
+          `SELECT mp.rating_delta AS ratingDelta, p.rating AS rating
+           FROM match_players mp JOIN players p ON p.id = mp.player_id
+           WHERE mp.match_id = ? AND mp.player_id = ?`,
+        );
+        return input.participants.map((p) => {
+          const row = saved.get(input.matchId, p.playerId) as { ratingDelta: number; rating: number } | undefined;
+          return { ...p, ratingDelta: row?.ratingDelta ?? 0, ratingAfter: row?.rating ?? 1000 };
+        });
+      }
+
       const getRating = this.db.prepare('SELECT rating FROM players WHERE id = ?');
       const entries = input.participants.map((p) => {
         const row = getRating.get(p.playerId) as { rating: number } | undefined;

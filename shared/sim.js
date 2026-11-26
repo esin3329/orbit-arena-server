@@ -10,7 +10,7 @@
  */
 
 /** 클라이언트/서버 메시지 형식이 바뀌면 올린다. 불일치 시 서버가 WS 업그레이드를 426 으로 거부 */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const TICK_RATE = 30;
 export const TICK_MS = 1000 / TICK_RATE;

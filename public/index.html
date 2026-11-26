@@ -3,8 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Orbit Arena</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='10' fill='%2338bdf8'/></svg>" />
+    <title>Orbit Arena — 실시간 멀티플레이 아레나</title>
+    <meta name="description" content="서버 권위형 실시간 탑다운 아레나 슈터. 30Hz 틱, 클라이언트 예측·보간, 지연 보상, 브라우저에서 바로 플레이." />
+    <meta name="theme-color" content="#0b1020" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- 링크 공유 미리보기 (Open Graph / Twitter) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Orbit Arena" />
+    <meta property="og:description" content="서버 권위형 실시간 멀티플레이 아레나 — 클라이언트 예측, 보간, 지연 보상, 바이너리 스냅샷" />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -39,7 +52,7 @@
             <p id="queue-status" class="muted"></p>
           </div>
           <div class="help-box">
-            <b>조작</b> WASD 이동 · 마우스 조준 · 클릭 사격 · Space 대시 · Esc 나가기<br />
+            <b>조작</b> WASD 이동 · 마우스 조준 · 클릭 사격 · Space 대시 · M 음소거 · Esc 나가기<br />
             혼자 접속해도 몇 초 뒤 봇이 채워져 매치가 시작됩니다.
           </div>
         </section>
@@ -81,6 +94,7 @@
         <label><input type="checkbox" id="opt-interp" checked /> 보간</label>
         <label><input type="checkbox" id="opt-lagcomp" checked /> 지연 보상</label>
         <label><input type="checkbox" id="opt-ghost" /> 서버 위치 표시</label>
+        <label class="vol">효과음 <input type="range" id="sfx-vol" min="0" max="100" step="5" /> <span id="sfx-vol-label"></span></label>
       </div>
       <div id="dead-msg" class="center-msg" hidden>리스폰 대기 중…</div>
       <div id="result" class="overlay" hidden>

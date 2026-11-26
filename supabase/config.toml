@@ -1,0 +1,10 @@
+# Supabase CLI 로컬 스택 설정 (`supabase start`)
+# CI 에서 supabase/migrations/*.sql 을 실제 Postgres + PostgREST 에 적용해 Repository 계약 테스트를 돌리는 용도.
+# 지정하지 않은 항목은 CLI 기본값을 쓴다.
+project_id = "orbit-arena-server"
+
+[api]
+schemas = ["public"]
+
+[db.seed]
+enabled = false
