@@ -42,14 +42,15 @@ jobs:
         with:
           version: latest
       - name: Start local Supabase (migrations applied on start)
-        run: supabase start -x gotrue,realtime,storage-api,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector
+        # auth(gotrue)는 제외하지 않는다: 제외하면 최신 CLI 가 status 에 API 키를 출력하지 않는다
+        run: supabase start -x realtime,storage-api,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector
       - name: Repository contract test (Supabase adapter)
         run: |
           status="$(supabase status -o json)"
-          export SUPABASE_TEST_URL="$(echo "$status" | jq -r '.API_URL')"
-          export SUPABASE_TEST_SERVICE_ROLE_KEY="$(echo "$status" | jq -r '.SERVICE_ROLE_KEY')"
+          export SUPABASE_TEST_URL="$(echo "$status" | jq -r '.API_URL // empty')"
+          export SUPABASE_TEST_SERVICE_ROLE_KEY="$(echo "$status" | jq -r '.SERVICE_ROLE_KEY // .SECRET_KEY // empty')"
           # 로컬 스택의 키는 공개된 데모 키라 출력해도 안전하다
-          if [ "$SUPABASE_TEST_URL" = null ] || [ "$SUPABASE_TEST_SERVICE_ROLE_KEY" = null ]; then echo "$status"; exit 1; fi
+          if [ -z "$SUPABASE_TEST_URL" ] || [ -z "$SUPABASE_TEST_SERVICE_ROLE_KEY" ]; then echo "$status"; exit 1; fi
           REQUIRE_SUPABASE=1 node --test test/repository.test.ts
       - name: Stop Supabase
         if: always()
