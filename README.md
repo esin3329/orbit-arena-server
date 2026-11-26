@@ -161,6 +161,19 @@ docker run -p 3000:3000 -e TOKEN_SECRET="$(openssl rand -hex 32)" -v orbit-data:
 
 이미지는 `NODE_ENV=production`으로 돌기 때문에, `TOKEN_SECRET`이 없거나 32자보다 짧으면 서버가 기동하지 않습니다(fail fast).
 
+### 로컬 룸 워커
+
+`ROOM_WORKERS=2`로 서버를 실행하면 게이트웨이 프로세스가 한 대기열에서 매칭하고 두 워커에 룸을 배분합니다. WebSocket 주소는 같으며, 재접속 시 게이트웨이가 기존 룸의 워커로 연결합니다. 룸 배정은 현재 맡은 룸이 가장 적은 워커부터 이뤄집니다.
+
+PowerShell에서 두 워커를 실행하는 예입니다.
+
+```powershell
+$env:ROOM_WORKERS = '2'
+npm start
+```
+
+워커는 동일한 SQLite 파일 또는 Supabase 프로젝트를 사용합니다. `/metrics`에서 준비된 워커 수와 룸을 맡고 있는 워커 수를 확인할 수 있습니다.
+
 ---
 
 ## DB: SQLite ↔ Supabase
@@ -354,5 +367,5 @@ npm run check   # tsc + 테스트
 
 솔직하게 남겨 둔 부분과 확장 방향입니다.
 
-- **수평 확장**: 지금은 단일 프로세스입니다. 룸은 서로 독립적이므로 *룸 단위 샤딩*이 자연스럽습니다. 매치메이커를 Redis 대기열로 분리하고, 각 게임 서버가 룸을 맡고, 로드밸런서는 `roomId` 기반 sticky 라우팅을 하는 구조로 갈 수 있습니다. 이때 DB는 Supabase(Postgres)를 씁니다.
+- **다중 호스트 확장**: 현재 룸 워커는 한 호스트에서 게이트웨이와 IPC로 통신합니다. 여러 호스트에 걸쳐 운영하려면 Redis 공용 매칭 대기열과 룸 소유 서버로 재접속을 라우팅하는 구성이 필요합니다.
 - **실제 Supabase 프로젝트 E2E**: CI는 로컬 Supabase 스택으로 검증합니다. 호스팅 프로젝트(커넥션 풀러·네트워크 지연 포함)에서의 동작은 따로 확인해야 합니다.

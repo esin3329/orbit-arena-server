@@ -28,6 +28,7 @@ export interface Config {
   githubAuthOrigin?: string;
   /** N틱마다 스냅샷 전송 (30Hz 틱 / 2 = 15Hz 스냅샷) */
   snapshotEvery: number;
+  roomWorkers: number;
   /** IP 당 REST 요청 허용량(초당) */
   apiRatePerSec: number;
   /** IP 당 게스트 계정 생성 허용량(분당) */
@@ -50,6 +51,7 @@ export const config: Config = {
   supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY,
   githubAuthOrigin: env.GITHUB_AUTH_ORIGIN || undefined,
   snapshotEvery: num(env.SNAPSHOT_EVERY, 2),
+  roomWorkers: num(env.ROOM_WORKERS, 0),
   apiRatePerSec: num(env.API_RATE_PER_SEC, 10),
   guestRatePerMin: num(env.GUEST_RATE_PER_MIN, 5),
   match: {
@@ -76,6 +78,10 @@ export function validateConfig(cfg: Config, nodeEnv = process.env.NODE_ENV): str
   int('PORT', cfg.port, 0, 65535);
   int('TOKEN_TTL_SEC', cfg.tokenTtlSec, 60, 60 * 60 * 24 * 90);
   int('SNAPSHOT_EVERY', cfg.snapshotEvery, 1, 30);
+  int('ROOM_WORKERS', cfg.roomWorkers, 0, 32);
+  if (cfg.roomWorkers > 0 && cfg.dbDriver === 'sqlite' && cfg.sqlitePath === ':memory:') {
+    errors.push('ROOM_WORKERS requires a shared on-disk SQLite database or Supabase');
+  }
   if (!(cfg.apiRatePerSec > 0)) errors.push('API_RATE_PER_SEC must be > 0');
   if (!(cfg.guestRatePerMin > 0)) errors.push('GUEST_RATE_PER_MIN must be > 0');
 

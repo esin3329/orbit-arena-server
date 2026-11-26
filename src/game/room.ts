@@ -56,6 +56,9 @@ export interface RoomOptions {
   snapshotEvery: number;
   repo: Repository | null;
   onEnd?: (room: Room) => void;
+  onEnding?: () => void;
+  onPlayerExpired?: (playerId: string) => void;
+  onTick?: (ms: number) => void;
   /** 재현용 시드. 생략하면 무작위 시드를 만들고 로그에 남긴다 */
   seed?: number;
 }
@@ -131,7 +134,7 @@ export class Room {
 
   // ───────────────────────── 참가/이탈 ─────────────────────────
 
-  addPlayer(conn: PlayerConnection) {
+  addPlayer(conn: PlayerConnection): void {
     if (this.seats.has(conn.playerId)) return void this.rebind(conn.playerId, conn);
     if (this.seats.size >= this.opts.maxPlayers) this.kickOneBot();
 
@@ -222,7 +225,9 @@ export class Room {
       while (this.acc >= sim.TICK_MS && steps < MAX_CATCHUP_STEPS && this.state === 'playing') {
         const t0 = performance.now();
         this.step();
-        metrics.observeTick(performance.now() - t0);
+        const elapsed = performance.now() - t0;
+        metrics.observeTick(elapsed);
+        this.opts.onTick?.(elapsed);
         this.acc -= sim.TICK_MS;
         steps++;
       }
@@ -265,6 +270,7 @@ export class Room {
       if (seat.disconnectedTick !== null && this.world.tick - seat.disconnectedTick > this.opts.reconnectGraceTicks) {
         logger.info('reconnect grace expired', { roomId: this.id, playerId: seat.entity.playerId });
         this.removePlayer(seat.entity.playerId);
+        this.opts.onPlayerExpired?.(seat.entity.playerId);
       }
     }
   }
@@ -353,6 +359,7 @@ export class Room {
 
   private async finish(reason: EndReason): Promise<MatchResultRow[]> {
     this.state = 'ending';
+    this.opts.onEnding?.();
     this.stop();
     const ranked = rank([...[...this.seats.values()].map((s) => s.entity), ...this.departed.values()]);
     const humans = ranked.filter((r) => !r.item.isBot);
