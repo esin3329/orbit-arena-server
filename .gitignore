@@ -7,3 +7,6 @@ data/
 
 supabase/.temp
 supabase/.branches
+
+# 로컬 개발 도구 설정 (Claude Code 등)
+.claude/

@@ -1,5 +1,9 @@
 # Orbit Arena — 실시간 멀티플레이 게임 서버
 
+[![CI](https://github.com/esin3329/orbit-arena-server/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/esin3329/orbit-arena-server/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node.js 24](https://img.shields.io/badge/node-24-339933?logo=node.js&logoColor=white)
+
 > **서버 권위형(authoritative) 실시간 게임 웹 서버** 포트폴리오
 > Node.js 24 · TypeScript · WebSocket · SQLite / Supabase(PostgreSQL)
 
@@ -383,3 +387,9 @@ npm run check   # tsc + 테스트
 
 - **다중 호스트 확장**: 현재 룸 워커는 한 호스트에서 게이트웨이와 IPC로 통신합니다. 여러 호스트에 걸쳐 운영하려면 Redis 공용 매칭 대기열과 룸 소유 서버로 재접속을 라우팅하는 구성이 필요합니다.
 - **실제 Supabase 프로젝트 E2E**: CI는 로컬 Supabase 스택으로 검증합니다. 호스팅 프로젝트(커넥션 풀러·네트워크 지연 포함)에서의 동작은 따로 확인해야 합니다.
+
+---
+
+## 라이선스
+
+[MIT](LICENSE)
