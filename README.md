@@ -197,7 +197,7 @@ Supabase 쪽 코드는 두 단계로 자동 검증합니다.
    - 검증 항목: `record_match`의 반영·**원자성(롤백)**·**멱등성**, `player_matches` 정렬, **RLS**(익명은 읽기만, 쓰기 0행, RPC 호출 거부), 제약조건·인덱스.
    - Docker 없이 `npm test`에서 매번 돕니다.
 2. **supabase-js 어댑터** — [`test/repository.test.ts`](test/repository.test.ts)
-   - SQLite와 Supabase 구현에 **같은 계약 테스트**를 돌립니다.
+   - SQLite와 Supabase 구현에 **같은 계약 테스트**를 돌립니다. 같은 플레이어가 참가한 두 매치를 동시에 저장하면, 뒤에 처리되는 매치는 앞선 매치가 반영한 레이팅으로 Elo를 계산합니다.
    - CI의 `supabase` 잡이 `supabase start`(Postgres + PostgREST + Kong)로 마이그레이션을 적용하고 실제 HTTP API로 실행합니다.
    - 로컬에서는 `SUPABASE_TEST_URL`, `SUPABASE_TEST_SERVICE_ROLE_KEY`가 있을 때만 돌고, 없으면 건너뜁니다.
 
@@ -345,6 +345,5 @@ npm run check   # tsc + 테스트
 
 - **수평 확장**: 지금은 단일 프로세스입니다. 룸은 서로 독립적이므로 *룸 단위 샤딩*이 자연스럽습니다. 매치메이커를 Redis 대기열로 분리하고, 각 게임 서버가 룸을 맡고, 로드밸런서는 `roomId` 기반 sticky 라우팅을 하는 구조로 갈 수 있습니다. 이때 DB는 Supabase(Postgres)를 씁니다.
 - **스냅샷 델타 확장**: 지금은 오브만 델타입니다. 플레이어·탄환까지 기준 스냅샷 대비 델타로 보내면 더 줄일 수 있습니다. 대신 클라이언트가 기준 스냅샷의 ack를 돌려줘야 합니다.
-- **Supabase 레이팅 계산 위치**: Supabase 어댑터는 레이팅을 읽어 델타를 계산한 뒤 `record_match`에 넘깁니다. 갱신은 `rating + delta` 상대값이라 유실은 없습니다. 다만 같은 플레이어의 매치 두 개가 동시에 끝나면 기대 승률이 약간 오래된 레이팅으로 계산됩니다. Elo 계산을 SQL 함수 안(행 잠금)으로 옮기면 SQLite와 완전히 같아집니다.
 - **실제 Supabase 프로젝트 E2E**: CI는 로컬 Supabase 스택으로 검증합니다. 호스팅 프로젝트(커넥션 풀러·네트워크 지연 포함)에서의 동작은 따로 확인해야 합니다.
 - **계정**: 현재는 게스트 토큰만 있습니다. Supabase Auth(OAuth)를 붙이면 토큰 검증을 Supabase JWT로 교체할 수 있습니다.

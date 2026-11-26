@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { computeRatingDeltas } from './rating.ts';
 import type {
   MatchParticipantResult,
   MatchRecordInput,
@@ -72,14 +71,6 @@ class SupabaseRepository implements Repository {
   }
 
   async recordMatch(input: MatchRecordInput): Promise<MatchParticipantResult[]> {
-    const ids = input.participants.map((p) => p.playerId);
-    const current = check(await this.sb.from('players').select('id, rating').in('id', ids)) as { id: string; rating: number }[];
-    const ratingOf = new Map(current.map((r) => [r.id, r.rating]));
-    const deltas = computeRatingDeltas(
-      input.participants.map((p) => ({ playerId: p.playerId, placement: p.placement, rating: ratingOf.get(p.playerId) ?? 1000 })),
-    );
-
-    // rating = rating + delta 형태의 상대 갱신이라 동시 매치가 겹쳐도 갱신이 유실되지 않는다
     const rows = check(
       await this.sb.rpc('record_match', {
         p_match_id: input.matchId,
@@ -93,17 +84,14 @@ class SupabaseRepository implements Repository {
           kills: p.kills,
           deaths: p.deaths,
           placement: p.placement,
-          rating_delta: deltas.get(p.playerId) ?? 0,
         })),
       }),
     ) as { out_player_id: string; out_rating: number; out_rating_delta: number }[];
-    // 재시도로 이미 기록된 매치였다면 함수가 "저장된" 변동값을 돌려준다 → 방금 계산한 값보다 이것을 신뢰
     const saved = new Map(rows.map((r) => [r.out_player_id, r]));
 
     return input.participants.map((p) => {
       const row = saved.get(p.playerId);
-      const delta = row?.out_rating_delta ?? deltas.get(p.playerId) ?? 0;
-      return { ...p, ratingDelta: delta, ratingAfter: row?.out_rating ?? (ratingOf.get(p.playerId) ?? 1000) + delta };
+      return { ...p, ratingDelta: row?.out_rating_delta ?? 0, ratingAfter: row?.out_rating ?? 1000 };
     });
   }
 
