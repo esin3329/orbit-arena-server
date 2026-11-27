@@ -2,6 +2,9 @@
  * Repository 계약 테스트 — 같은 시나리오를 모든 저장소 구현에 돌린다.
  *
  * - SQLite: 항상 실행 (인메모리)
+ * - Cloudflare Durable Object SQLite(`cloudflare/do-sqlite-repository.ts`): 항상 실행.
+ *   DO 의 `storage.sql.exec` / `transactionSync` 와 같은 모양의 어댑터를 node:sqlite 위에 만들어 넣는다.
+ *   (라이브 데모가 실제로 쓰는 저장소이므로 Node 서버용 SqliteRepository 와 같은 계약을 지켜야 한다)
  * - Supabase: SUPABASE_TEST_URL / SUPABASE_TEST_SERVICE_ROLE_KEY 가 있을 때만 실행.
  *   CI 에서는 `supabase start`(로컬 Supabase 스택: Postgres + PostgREST + Kong)에 마이그레이션을 적용한 뒤 실행해
  *   supabase-js 쿼리(임베드 조인, 정렬, RPC)까지 실제 서버로 검증한다.
@@ -11,7 +14,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { SqliteRepository } from '../src/db/sqlite.ts';
+import { DoSqliteRepository, type DurableObjectStorage } from '../cloudflare/do-sqlite-repository.ts';
 import { createSupabaseRepository } from '../src/db/supabase.ts';
 import { computeRatingDeltas } from '../src/db/rating.ts';
 import type { MatchRecordInput, Repository } from '../src/db/types.ts';
@@ -163,8 +168,39 @@ function contract(name: string, make: () => Promise<Repository>, skip: string | 
 }
 
 contract('sqlite', async () => new SqliteRepository(':memory:'));
+contract('do-sqlite', async () => new DoSqliteRepository(nodeDoStorage()));
 contract(
   'supabase',
   async () => createSupabaseRepository(SUPABASE_URL!, SUPABASE_KEY!),
   SUPABASE_URL && SUPABASE_KEY ? false : 'SUPABASE_TEST_URL / SUPABASE_TEST_SERVICE_ROLE_KEY 미설정',
 );
+
+/**
+ * Durable Object storage 흉내: `sql.exec(query, ...bindings).toArray()` 와 `transactionSync(fn)`.
+ * DO 와 마찬가지로 동기 트랜잭션이며, 콜백이 throw 하면 롤백한다.
+ */
+function nodeDoStorage(): DurableObjectStorage {
+  const db = new DatabaseSync(':memory:');
+  db.exec('PRAGMA foreign_keys = ON');
+  return {
+    sql: {
+      exec(query: string, ...bindings: unknown[]) {
+        const stmt = db.prepare(query);
+        const args = bindings as never[];
+        const rows = stmt.columns().length > 0 ? stmt.all(...args) : (stmt.run(...args), []);
+        return { toArray: () => rows as Array<Record<string, unknown>> };
+      },
+    },
+    transactionSync<T>(callback: () => T): T {
+      db.exec('BEGIN');
+      try {
+        const result = callback();
+        db.exec('COMMIT');
+        return result;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    },
+  };
+}

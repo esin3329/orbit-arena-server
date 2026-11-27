@@ -187,8 +187,11 @@ npm start
 
 ```bash
 npx wrangler secret put TOKEN_SECRET   # 최초 1회 (32자 이상 랜덤 시크릿)
-npm run cf:deploy                      # 에셋 스테이징 + wrangler deploy
+npm run cf:deploy                      # 에셋 스테이징 + wrangler deploy (수동 배포)
 ```
+
+- **자동 배포:** main 에 병합되고 CI(test·supabase·docker·cloudflare)가 모두 통과하면 `deploy` 잡이 `wrangler deploy` 후 `/health`를 확인합니다. 저장소 시크릿 `CLOUDFLARE_API_TOKEN`·`CLOUDFLARE_ACCOUNT_ID`가 있어야 하며, 없으면 건너뜁니다.
+- **검증:** `cloudflare/`도 `tsc` 타입체크 대상입니다. DO 저장소(`cloudflare/do-sqlite-repository.ts`)는 Node SQLite·Supabase와 **같은 Repository 계약 테스트**를 통과해야 하고, CI `cloudflare` 잡이 로컬 workerd(`wrangler dev`)에 띄운 실제 워커로 정적 에셋 → REST → Durable Object → WebSocket → 매치 시작 → 바이너리 스냅샷까지 스모크 테스트(`scripts/cf-smoke.ts`)합니다.
 
 ---
 
@@ -362,6 +365,8 @@ src/
   util/                JSON 로거, 토큰 버킷, Prometheus 메트릭, 시드 RNG, 재시도
 public/                브라우저 클라이언트 (Canvas, 빌드 없음), 파비콘·OG 이미지
 cloudflare/worker.ts   Cloudflare Workers + SQLite Durable Object(ArenaDO) 엔트리포인트
+cloudflare/do-sqlite-repository.ts  DO 내장 SQLite Repository (런타임 비의존 → Node 계약 테스트 대상)
+scripts/cf-smoke.ts    Cloudflare 배포본 스모크 테스트 (wrangler dev / 배포 URL)
 wrangler.jsonc         Cloudflare Workers / Durable Objects / Assets 배포 설정
 scripts/cf-stage-assets.ts  Workers 정적 에셋(public/ + shared/ + _headers) 스테이징 스크립트
 scripts/assets/        OG 이미지 원본 HTML + PNG 렌더러 (`node scripts/assets/render.ts`, 헤드리스 Chrome/Edge)
@@ -386,12 +391,13 @@ npm run check   # tsc + 테스트
 - **안티치트:** 입력 예산(4배 입력 공격 시 처리율 제한), seq 0/역순/리플레이 거부
 - **게임 흐름 & 매치메이커:** 사격→사망→리스폰, 재접속 유예, 초기/재접속 `ack=0` 회귀 검증, 같은 매치 재입장 시 기록 복원(+DB 중복 저장 방지), 대기열 풀방 시작·봇 채움·난입(봇 양보)·이탈·셧다운
 - **장애 대응 & 룸 워커:** 틱 예외 시 룸 격리 종료, DB 일시 장애 재시도, 다중 워커 라우팅·메트릭 집계·워커 프로세스 크래시 시 자동 재시작 및 복구
-- **영속화:** 매치 종료→DB→레이팅, 경쟁 순위, SQLite·Supabase 공통 **Repository 계약**(멱등 재시도, 동시 매치 레이팅 일관성, 전적 정렬 후 limit)
+- **영속화:** 매치 종료→DB→레이팅, 경쟁 순위, SQLite·Cloudflare DO SQLite·Supabase 공통 **Repository 계약**(멱등 재시도, 동시 매치 레이팅 일관성, 전적 정렬 후 limit)
 - **Supabase 스키마:** PGlite에서 실제 마이그레이션 적용, `record_match` 원자성·멱등성·SQL 내 Elo 계산, `github_accounts`·`get_or_create_github_player()` 멱등성 및 RLS·권한
 - **코덱:** 바이너리 왕복 정밀도, 잘린 프레임 거부, JSON 대비 크기, 오브 델타, **v5 엔티티 ID 필드 델타**(플레이어 합류/이탈/정지 0B, 탄환 생성/소멸/생존 4B, 8인 교전 중 델타 적중 및 전송량 절감)
 - **보안·설정:** 토큰 변조/만료, 레이트 리밋, `TRUST_PROXY` 프록시 IP 추출, `/metrics` Bearer 토큰/루프백 접근 제어, CSP·보안 헤더, GitHub OAuth(PKCE·Origin·일회성 핸드오프), 프로토콜·설정 검증
 - **HTTP/WS:** REST 인증, WS 401(무효 토큰 및 미존재 DB 계정) 거부, 프로토콜 버전 426 거부, 중복 접속 4001
 - **E2E:** 로그인→매칭→스냅샷→종료→리더보드
+- **Cloudflare 배포본(CI `cloudflare` 잡):** `wrangler dev`로 실제 `cloudflare/worker.ts`를 띄워 에셋·health·게스트·리더보드·구버전 WS 거부·매치 시작·바이너리 스냅샷 확인
 
 ---
 
